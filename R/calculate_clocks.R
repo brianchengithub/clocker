@@ -5,8 +5,7 @@
 #' 
 #' Simple R interface for calculating 40+ epigenetic clocks from DNA methylation data.
 #' 
-#' @author Brian Chen
-#' @version 2.0.0
+#' @Brian Chen
 #' ============================================================================
 
 
@@ -574,7 +573,15 @@ calculate_clocks <- function(input, pheno = NULL, n_cores = NULL, verbose = TRUE
   # Load reference betas (packaged within)
   # ============================================================
   
-  reference_betas <- load_reference_betas(verbose)
+  if (verbose) message("DEBUG: About to load reference betas...")
+  reference_betas <- tryCatch({
+    load_reference_betas(verbose)
+  }, error = function(e) {
+    message("DEBUG: load_reference_betas failed: ", e$message)
+    message("DEBUG: Error call: ", deparse(e$call))
+    NULL
+  })
+  if (verbose) message("DEBUG: Reference betas loaded (or NULL)")
   
   # ============================================================
   # Perform imputation
@@ -582,7 +589,9 @@ calculate_clocks <- function(input, pheno = NULL, n_cores = NULL, verbose = TRUE
   
   log_msg("\n--- Imputation ---", verbose = verbose)
   
+  if (verbose) message("DEBUG: About to impute...")
   betas <- perform_smart_imputation(betas, reference_betas, verbose)
+  if (verbose) message("DEBUG: Imputation done")
   
   # ============================================================
   # Check clock availability
@@ -590,7 +599,9 @@ calculate_clocks <- function(input, pheno = NULL, n_cores = NULL, verbose = TRUE
   
   log_msg("\n--- Checking Clock Availability ---", verbose = verbose)
   
+  if (verbose) message("DEBUG: About to check clock availability...")
   availability <- check_clock_availability(rownames(betas), verbose)
+  if (verbose) message("DEBUG: Clock availability checked")
   
   # ============================================================
 
@@ -806,22 +817,52 @@ determine_optimal_cores <- function(n_samples, n_probes, requested_cores, verbos
 #' @keywords internal
 load_reference_betas <- function(verbose = TRUE) {
   
+  if (verbose) message("DEBUG load_ref: entering function")
+  
   # Try multiple locations to find the reference file
   # This handles both installed package and direct sourcing scenarios
   
-  ref_paths <- c(
-    # 1. Installed package location (try both package names)
-    system.file("extdata", "reference_betas.rds", package = "quickclocks"),
-    system.file("extdata", "reference_betas.rds", package = "EpigeneticClockCalculator"),
-    
-    # 2. Development: relative to current working directory
-    file.path(getwd(), "inst", "extdata", "reference_betas.rds")
-  )
+  # Helper to safely check if a file exists
+  safe_file_exists <- function(p) {
+    tryCatch({
+      if (is.null(p)) return(FALSE)
+      if (!is.character(p)) return(FALSE)
+      if (length(p) != 1) return(FALSE)
+      if (is.na(p)) return(FALSE)
+      if (nchar(p) == 0) return(FALSE)
+      file.exists(p)
+    }, error = function(e) {
+      if (verbose) message("DEBUG load_ref: safe_file_exists error for '", 
+                           as.character(p), "': ", e$message)
+      FALSE
+    })
+  }
+  
+  # Build list of candidate paths
+  ref_paths <- character(0)
+  
+  # 1. Installed package location (try both package names)
+  tryCatch({
+    p <- system.file("extdata", "reference_betas.rds", package = "quickclocks")
+    if (verbose) message("DEBUG load_ref: quickclocks system.file = '", p, "'")
+    if (nchar(p) > 0) ref_paths <- c(ref_paths, p)
+  }, error = function(e) {
+    if (verbose) message("DEBUG load_ref: system.file quickclocks error: ", e$message)
+  })
+  
+  tryCatch({
+    p <- system.file("extdata", "reference_betas.rds", package = "EpigeneticClockCalculator")
+    if (verbose) message("DEBUG load_ref: ECC system.file = '", p, "'")
+    if (nchar(p) > 0) ref_paths <- c(ref_paths, p)
+  }, error = function(e) NULL)
+  
+  # 2. Development: relative to current working directory
+  ref_paths <- c(ref_paths, file.path(getwd(), "inst", "extdata", "reference_betas.rds"))
   
   # 3. Try relative to source file location (only works when sourced)
   tryCatch({
     src_file <- sys.frame(1)$ofile
-    if (!is.null(src_file) && nchar(src_file) > 0) {
+    if (!is.null(src_file) && is.character(src_file) && nchar(src_file) > 0) {
       ref_paths <- c(ref_paths,
         file.path(dirname(src_file), "..", "inst", "extdata", "reference_betas.rds"),
         file.path(dirname(src_file), "..", "..", "inst", "extdata", "reference_betas.rds")
@@ -832,32 +873,40 @@ load_reference_betas <- function(verbose = TRUE) {
   # 4. Try to find via installed package path
   tryCatch({
     pkg_path <- find.package("quickclocks", quiet = TRUE)
-    if (length(pkg_path) > 0) {
-      ref_paths <- c(ref_paths,
-        file.path(pkg_path, "extdata", "reference_betas.rds")
-      )
+    if (verbose) message("DEBUG load_ref: find.package = '", paste(pkg_path, collapse=", "), "'")
+    if (length(pkg_path) > 0 && nchar(pkg_path[1]) > 0) {
+      ref_paths <- c(ref_paths, file.path(pkg_path[1], "extdata", "reference_betas.rds"))
     }
   }, error = function(e) NULL)
   
-  # Also check for the original filename
+  # 5. Also check for the original filename
   ref_paths <- c(ref_paths,
     file.path(getwd(), "inst", "extdata", "final_cg_means_01032026.rds"),
     file.path(getwd(), "final_cg_means_01032026.rds")
   )
   
-  # Filter out empty/NULL paths, then check each
+  if (verbose) {
+    message("DEBUG load_ref: candidate paths (", length(ref_paths), "):")
+    for (i in seq_along(ref_paths)) {
+      message("  [", i, "] ", ref_paths[i])
+    }
+  }
+  
+  # Check each path safely
   for (path in ref_paths) {
-    tryCatch({
-      if (!is.null(path) && is.character(path) && nchar(path) > 0 && file.exists(path)) {
+    if (safe_file_exists(path)) {
+      tryCatch({
         ref <- readRDS(path)
         log_msg("Loaded %d reference probe values", length(ref), verbose = verbose)
         return(ref)
-      }
-    }, error = function(e) NULL)
+      }, error = function(e) {
+        if (verbose) message("DEBUG load_ref: readRDS error for '", path, "': ", e$message)
+      })
+    }
   }
   
   # If not found, warn user
-log_msg("WARNING: Reference betas file not found.", verbose = verbose)
+  log_msg("WARNING: Reference betas file not found.", verbose = verbose)
   log_msg("  Expected location: inst/extdata/reference_betas.rds", verbose = verbose)
   log_msg("  Imputation will use row medians only.", verbose = verbose)
   return(NULL)
