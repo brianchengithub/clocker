@@ -8,7 +8,6 @@
 # Package build files
 *.tar.gz
 *.Rcheck/
-man/*.Rd
 NAMESPACE.bak
 
 # Output and intermediate files
