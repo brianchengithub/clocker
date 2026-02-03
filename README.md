@@ -24,24 +24,15 @@ A comprehensive R package for calculating 40+ epigenetic clocks from DNA methyla
 
 ## Installation
 
-### Option 1: Install as R Package (Recommended)
-
 ```r
 # Install from GitHub
 devtools::install_github("brianchengithub/quickclocks")
 ```
 
-### Option 2: Source Directly
-
-```r
-# Clone the repo, then:
-source("install_dependencies.R")  # Install all dependencies
-source("R/calculate_clocks.R")    # Load the main function
-```
 
 ### Dependencies
 
-The install script handles everything automatically:
+The install script handles everything automatically (only need to run once):
 
 ```r
 source("install_dependencies.R")
@@ -63,7 +54,7 @@ library(quickclocks)
 # Calculate all clocks from IDAT files
 results <- calculate_clocks("/path/to/idat/directory")
 
-# Or from a numeric matrix (of DNA methylation beta values)
+# ALTERNATIVE: Input numeric matrix (of DNA methylation beta values)
 results <- calculate_clocks(beta_matrix)
 
 ```
