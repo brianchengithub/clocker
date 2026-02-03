@@ -5,7 +5,7 @@
 #' 
 #' Simple R interface for calculating 40+ epigenetic clocks from DNA methylation data.
 #' 
-#' @Brian Chen
+#' @author Brian Chen
 #' @version 2.0.0
 #' ============================================================================
 
@@ -810,25 +810,34 @@ load_reference_betas <- function(verbose = TRUE) {
   # This handles both installed package and direct sourcing scenarios
   
   ref_paths <- c(
-    # 1. Installed package location
+    # 1. Installed package location (try both package names)
+    system.file("extdata", "reference_betas.rds", package = "quickclocks"),
     system.file("extdata", "reference_betas.rds", package = "EpigeneticClockCalculator"),
     
     # 2. Development: relative to current working directory
-    file.path(getwd(), "inst", "extdata", "reference_betas.rds"),
-    
-    # 3. Development: relative to this source file
-    file.path(dirname(sys.frame(1)$ofile %||% ""), "..", "inst", "extdata", "reference_betas.rds"),
-    
-    # 4. Development: one level up from R directory
-    file.path(dirname(sys.frame(1)$ofile %||% ""), "..", "..", "inst", "extdata", "reference_betas.rds"),
-    
-    # 5. Check if package is findable
-    tryCatch(
-      file.path(find.package("EpigeneticClockCalculator", quiet = TRUE), 
-                "inst", "extdata", "reference_betas.rds"),
-      error = function(e) ""
-    )
+    file.path(getwd(), "inst", "extdata", "reference_betas.rds")
   )
+  
+  # 3. Try relative to source file location (only works when sourced)
+  tryCatch({
+    src_file <- sys.frame(1)$ofile
+    if (!is.null(src_file) && nchar(src_file) > 0) {
+      ref_paths <- c(ref_paths,
+        file.path(dirname(src_file), "..", "inst", "extdata", "reference_betas.rds"),
+        file.path(dirname(src_file), "..", "..", "inst", "extdata", "reference_betas.rds")
+      )
+    }
+  }, error = function(e) NULL)
+  
+  # 4. Try to find via installed package path
+  tryCatch({
+    pkg_path <- find.package("quickclocks", quiet = TRUE)
+    if (length(pkg_path) > 0) {
+      ref_paths <- c(ref_paths,
+        file.path(pkg_path, "extdata", "reference_betas.rds")
+      )
+    }
+  }, error = function(e) NULL)
   
   # Also check for the original filename
   ref_paths <- c(ref_paths,
@@ -836,12 +845,15 @@ load_reference_betas <- function(verbose = TRUE) {
     file.path(getwd(), "final_cg_means_01032026.rds")
   )
   
+  # Filter out empty/NULL paths, then check each
   for (path in ref_paths) {
-    if (!is.null(path) && nchar(path) > 0 && file.exists(path)) {
-      ref <- readRDS(path)
-      log_msg("Loaded %d reference probe values", length(ref), verbose = verbose)
-      return(ref)
-    }
+    tryCatch({
+      if (!is.null(path) && is.character(path) && nchar(path) > 0 && file.exists(path)) {
+        ref <- readRDS(path)
+        log_msg("Loaded %d reference probe values", length(ref), verbose = verbose)
+        return(ref)
+      }
+    }, error = function(e) NULL)
   }
   
   # If not found, warn user
