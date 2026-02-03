@@ -1,5 +1,6 @@
 # Generated - do not edit by hand
 export(calculate_clocks)
+export(run_epigenetic_clocks)
 
 importFrom(parallel, makeCluster, stopCluster, detectCores, clusterExport, parApply)
 importFrom(stats, median, na.omit, predict, lm, coef, cor)

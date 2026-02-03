@@ -1,61 +1,70 @@
 \name{calculate_clocks}
 \alias{calculate_clocks}
+\alias{run_epigenetic_clocks}
 \title{Calculate Epigenetic Clocks}
 \description{
-  Unified function for calculating 40+ epigenetic clocks from DNA methylation data.
-  Automatically detects input type (IDAT directory or beta matrix) and array platform.
-  Includes EpiDISH cell type deconvolution, PC-adjusted clocks, and age acceleration metrics.
+Main function to calculate 40+ epigenetic clocks from DNA methylation data.
+Automatically detects whether input is a directory path (IDAT files) or
+a numeric matrix of beta values.
 }
 \usage{
-calculate_clocks(input, n_cores = NULL, verbose = TRUE)
+calculate_clocks(input, pheno = NULL, n_cores = NULL, verbose = TRUE)
+
+run_epigenetic_clocks(input, pheno = NULL, n_cores = NULL, verbose = TRUE)
 }
 \arguments{
-  \item{input}{Either a character string path to an IDAT directory, or a numeric matrix 
-    of beta values with CpG probe IDs as row names and sample IDs as column names.}
-  \item{n_cores}{Number of CPU cores for parallel processing. NULL (default) auto-detects 
-    the optimal number based on data size and available resources.}
-  \item{verbose}{Logical. Print progress messages during calculation. Default TRUE.}
+  \item{input}{Either a character string path to a directory containing IDAT files,
+    a path to an RDS or CSV file, or a numeric matrix of beta values with CpG
+    probe IDs as rownames and sample IDs as colnames.}
+  \item{pheno}{Optional data.frame with phenotype data. Should have row names
+    matching sample IDs, an \code{Age} column (numeric), and a \code{Female}
+    column (1=female, 0=male, 0.5=unknown). Required for accurate PC clock
+    calculations.}
+  \item{n_cores}{Number of CPU cores to use. Default \code{NULL} selects
+    automatically based on data size, available cores, and RAM.}
+  \item{verbose}{Logical. Print progress messages. Default \code{TRUE}.}
 }
 \value{
-  A \code{data.frame} with one row per sample and columns including:
+A data.frame with sample IDs as rows and columns including:
   \itemize{
-    \item \code{Sample_ID} - Sample identifiers
-    \item \code{CellType_RPC_*} - EpiDISH RPC cell type estimates (7 types)
-    \item \code{CellType_CP_*} - EpiDISH CP cell type estimates (7 types)
-    \item \code{InferredSex} - Chromosome-based sex inference (M/F/U)
-    \item \code{Horvath1}, \code{Horvath2}, \code{Hannum}, \code{PhenoAge}, etc. - Age clocks
-    \item \code{PCHorvath1}, \code{PCHorvath2}, etc. - PC-adjusted clocks
-    \item \code{DunedinPACE} - Pace of biological aging
-    \item \code{epiTOC2_TNSC} - Mitotic clock
+    \item \code{sample_id}: Sample identifier
+    \item \code{Horvath1}, \code{Horvath2}, \code{Hannum}, etc.: Clock values
+    \item \code{CellType_RPC_*}: EpiDISH RPC cell fractions
+    \item \code{CellType_CP_*}: EpiDISH CP cell fractions
+    \item \code{InferredSex}: Predicted sex (F/M/U)
+    \item \code{DunedinPACE}: Pace of aging
+    \item \code{PCHorvath1}, \code{PCPhenoAge}, etc.: PC clock values
   }
 }
 \details{
-  When provided IDAT files, preprocessing uses SeSAMe's openSesame() pipeline 
-  (NOOB normalization, dye-bias correction, pOOBAH).
+\strong{Preprocessing:} IDAT files are preprocessed with SeSAMe using NOOB
+normalization, dye-bias correction, and pOOBAH masking.
 
-  Cell type deconvolution uses EpiDISH with the centDHSbloodDMC.m reference matrix, 
-  providing estimates for 7 blood cell types (B, CD4T, CD8T, Mono, Neu, NK, Eos) 
-  via both RPC (Robust Partial Correlations) and CP (Constrained Projection) methods.
+\strong{Cell Deconvolution:} EpiDISH estimates 7 blood cell types (B, CD4T,
+CD8T, Mono, Neu, NK, Eos) using both RPC and CP methods.
 
-  PC clocks require a ~2GB data file automatically downloaded from Zenodo on first use.
-  When Age and Sex phenotype data are not provided, PC clocks use Horvath2 age estimates 
-  and chromosome-based sex inference.
+\strong{PC Clocks:} Require ~2GB data file from Zenodo (auto-downloaded and
+cached on first use). Age and sex are auto-inferred if not provided.
 
-  Missing CpG values are imputed using reference median values from the included 
-  reference dataset.
+\strong{Imputation:} Missing values are imputed using reference betas
+(if available) or row medians.
+
+\code{run_epigenetic_clocks} is an alias for backward compatibility.
 }
 \examples{
 \dontrun{
-  # From IDAT directory
-  results <- calculate_clocks("/path/to/idats/")
+# From IDAT directory
+results <- calculate_clocks("/path/to/idat/directory")
 
-  # From beta matrix
-  results <- calculate_clocks(beta_matrix)
+# From beta matrix
+results <- calculate_clocks(my_beta_matrix)
 
-  # With manual core count
-  results <- calculate_clocks(beta_matrix, n_cores = 4)
+# With phenotype data for PC clocks
+pheno <- data.frame(Age = c(45, 52), Female = c(1, 0),
+                    row.names = colnames(my_betas))
+results <- calculate_clocks(my_betas, pheno = pheno)
 }
 }
 \seealso{
-  \code{\link[EpiDISH]{epidish}}, \code{\link[sesame]{openSesame}}
+\code{\link[EpiDISH]{epidish}}, \code{\link[sesame]{openSesame}}
 }
