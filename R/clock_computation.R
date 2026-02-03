@@ -193,18 +193,25 @@ compute_dunedin_pace <- function(betas, results, verbose = TRUE) {
   tryCatch({
     log_msg("  Calculating DunedinPACE...", verbose = verbose)
 
-    # DunedinPACE expects probes as rows, samples as columns
-    # Ensure it's a proper matrix (critical for single-sample case)
     betas_dp <- betas
-    if (!is.matrix(betas_dp)) {
-      betas_dp <- as.matrix(betas_dp)
-    }
+    if (!is.matrix(betas_dp)) betas_dp <- as.matrix(betas_dp)
 
     # Force 2D even for single sample
     if (is.null(dim(betas_dp))) {
       probe_names <- names(betas_dp)
       betas_dp <- matrix(betas_dp, ncol = 1,
                          dimnames = list(probe_names, colnames(betas)[1]))
+    }
+
+    is_single <- ncol(betas_dp) == 1
+
+    # DunedinPACE's internal EPICv2 handler crashes on single-sample matrices
+    # (dimension drop during its replicate-averaging step). Workaround:
+    # duplicate the column so it processes as 2 samples, then extract first.
+    if (is_single) {
+      sample_name <- colnames(betas_dp)[1]
+      betas_dp <- cbind(betas_dp, betas_dp)
+      colnames(betas_dp) <- c(sample_name, paste0(sample_name, "_dup"))
     }
 
     pace <- DunedinPACE::PACEProjector(betas_dp)
@@ -220,11 +227,13 @@ compute_dunedin_pace <- function(betas, results, verbose = TRUE) {
       }
 
       if (!is.null(pace_val)) {
-        # Handle single-value result
-        if (length(pace_val) == 1 && ncol(betas) == 1) {
-          results$DunedinPACE <- pace_val
-        } else if (length(pace_val) == ncol(betas)) {
-          results$DunedinPACE <- pace_val
+        # If we duplicated, take only the first sample's result
+        if (is_single && length(pace_val) > 1) {
+          pace_val <- pace_val[1]
+        }
+        if (length(pace_val) == ncol(betas) ||
+            (length(pace_val) == 1 && ncol(betas) == 1)) {
+          results$DunedinPACE <- as.numeric(pace_val)
         }
       }
     }
@@ -321,6 +330,7 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
     }
 
     # Get Female values
+    # PC clocks require Female to be integerish (0 or 1), not 0.5
     if (!is.null(pheno) && is.data.frame(pheno) && "Female" %in% colnames(pheno)) {
       female_values <- pheno$Female
       if (verbose) message("    Using provided Female")
@@ -328,9 +338,14 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
       female_values <- results$InferredSex_Numeric
       if (verbose) message("    Using InferredSex_Numeric as Female")
     } else {
-      female_values <- rep(0.5, length(sample_ids))
-      if (verbose) message("    Warning: No sex available, using 0.5 (unknown)")
+      female_values <- rep(0, length(sample_ids))
+      if (verbose) message("    Warning: No sex available, defaulting Female=0")
     }
+
+    # calcPCClocks requires Female to be integer 0 or 1
+    # Round any ambiguous values (0.5 = Unknown) to nearest integer
+    female_values <- as.integer(round(female_values))
+    female_values[is.na(female_values)] <- 0L
 
     pheno_df <- data.frame(
       Sample_ID = sample_ids,

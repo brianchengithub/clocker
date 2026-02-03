@@ -56,11 +56,10 @@ calculate_clocks <- function(input, pheno = NULL, n_cores = NULL, verbose = TRUE
   if (verbose) {
     cat("\n")
     cat("==============================================================\n")
-    cat("       UNIFIED EPIGENETIC CLOCK CALCULATOR v2.0.0\n")
+    cat("       UNIFIED EPIGENETIC CLOCK CALCULATOR ('quickclocks') \n")
     cat("==============================================================\n")
     cat("\n")
     cat("Integrating clocks from:\n")
-    cat("  - SeSAMe (IDAT preprocessing)\n")
     cat("  - EpiDISH (cell type deconvolution: RPC + CP methods)\n")
     cat("  - DunedinPACE (pace of aging)\n")
     cat("  - PC-Clocks (Levine Lab)\n")
