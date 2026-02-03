@@ -135,7 +135,7 @@ load_reference_betas <- function(verbose = TRUE) {
 #' Perform smart imputation of missing beta values
 #'
 #' Uses reference betas when available, falls back to row medians,
-#' then to 0.5 for any remaining NAs.
+#' then to 0.5 for any remaining NAs. Fully vectorized for speed.
 #'
 #' @param betas Beta matrix (probes as rows, samples as columns)
 #' @param reference_betas Named vector of reference beta values (or NULL)
@@ -156,24 +156,50 @@ perform_smart_imputation <- function(betas, reference_betas, verbose = TRUE) {
           100 * n_missing_before / length(betas),
           verbose = verbose)
 
-  if (!is.null(reference_betas)) {
-    probes_with_missing <- rownames(betas)[apply(betas, 1, function(x) any(is.na(x)))]
+  # Identify rows (probes) with any NA — vectorized, avoids slow apply()
+  na_mask <- is.na(betas)
+  na_row_idx <- which(rowSums(na_mask) > 0)
+  na_probe_names <- rownames(betas)[na_row_idx]
 
-    for (probe in probes_with_missing) {
-      na_idx <- is.na(betas[probe, ])
-      if (probe %in% names(reference_betas)) {
-        betas[probe, na_idx] <- reference_betas[probe]
-      } else {
-        row_median <- median(betas[probe, ], na.rm = TRUE)
-        betas[probe, na_idx] <- if (!is.na(row_median)) row_median else 0.5
+  if (!is.null(reference_betas)) {
+    # Single vectorized lookup: which NA probes have reference values
+    ref_names <- names(reference_betas)
+    has_ref <- na_probe_names %in% ref_names
+
+    if (ncol(betas) == 1) {
+      # === Single sample: fully vectorized, no loops ===
+      ref_probes <- na_probe_names[has_ref]
+      if (length(ref_probes) > 0) {
+        betas[ref_probes, 1] <- reference_betas[ref_probes]
+      }
+      # Remaining NAs get 0.5 (no row median possible with 1 sample)
+      still_na <- is.na(betas[, 1])
+      if (any(still_na)) {
+        betas[still_na, 1] <- 0.5
+      }
+    } else {
+      # === Multi-sample: vectorize reference, loop only for row medians ===
+      ref_probes <- na_probe_names[has_ref]
+      for (probe in ref_probes) {
+        na_cols <- na_mask[probe, ]
+        betas[probe, na_cols] <- reference_betas[probe]
+      }
+      noref_probes <- na_probe_names[!has_ref]
+      for (probe in noref_probes) {
+        na_cols <- na_mask[probe, ]
+        row_med <- median(betas[probe, !na_cols], na.rm = TRUE)
+        betas[probe, na_cols] <- if (!is.na(row_med)) row_med else 0.5
       }
     }
   } else {
-    for (i in seq_len(nrow(betas))) {
-      na_idx <- is.na(betas[i, ])
-      if (any(na_idx)) {
-        row_median <- median(betas[i, ], na.rm = TRUE)
-        betas[i, na_idx] <- if (!is.na(row_median)) row_median else 0.5
+    # No reference available
+    if (ncol(betas) == 1) {
+      betas[na_mask] <- 0.5
+    } else {
+      for (i in na_row_idx) {
+        na_cols <- na_mask[i, ]
+        row_med <- median(betas[i, !na_cols], na.rm = TRUE)
+        betas[i, na_cols] <- if (!is.na(row_med)) row_med else 0.5
       }
     }
   }
