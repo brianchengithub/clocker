@@ -286,25 +286,34 @@ source("diagnose_packages.R")
 ## File Structure
 
 ```
-EpigeneticClockCalculator/
-├── R/
-│   ├── calculate_clocks.R      # Main function (single interface)
-│   ├── clock_implementations.R # Individual clock calculations
-│   ├── clock_availability.R    # Clock definitions and checking
-│   ├── imputation.R           # Missing value handling
-│   ├── input_handler.R        # IDAT/matrix detection
-│   ├── preprocessing.R        # SeSAMe preprocessing
-│   └── utils.R                # Helper functions
-├── inst/
-│   └── extdata/
-│       └── reference_betas.rds # Imputation reference data
-├── man/                        # Documentation
-├── install_dependencies.R      # Dependency installer
-├── diagnose_packages.R         # Troubleshooting script
+quickclocks/
 ├── DESCRIPTION
 ├── NAMESPACE
 ├── LICENSE
-└── README.md
+├── .gitignore
+├── README.md
+│
+├── R/
+│   ├── calculate_clocks.R      # Main exported function: calculate_clocks()
+│   ├── input_processing.R      # IDAT loading, reference betas, imputation
+│   ├── manifest.R              # Array manifest download and caching
+│   ├── sex_inference.R         # Chromosome-based biological sex inference
+│   ├── clock_engines.R         # Coefficient loading, weighted-sum calculator
+│   ├── cell_deconvolution.R    # EpiDISH cell type estimation (RPC + CP)
+│   ├── clock_computation.R     # Clock calculation orchestrator
+│   ├── utils.R                 # Logging, validation, platform detection
+│   └── zzz.R                   # Package load/attach hooks
+│
+├── inst/
+│   └── extdata/
+│       └── reference_betas.rds # Reference beta values for imputation
+│
+├── man/
+│   ├── calculate_clocks.Rd
+│   └── quickclocks-package.Rd
+│
+├── install_dependencies.R      # Setup script for required Bioconductor packages
+└── diagnose_packages.R         # Troubleshooting utility for package issues
 ```
 
 ## Citation
