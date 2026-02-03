@@ -85,29 +85,73 @@ horvath_age_transform <- function(x, adult_age = 20) {
 #'
 #' Computes a clock value as intercept + sum(beta * weight) with automatic
 #' detection of CpG and weight columns in coefficient data frames.
+#' Handles edge cases like single-CpG clocks, named vectors, and
+#' non-standard column names.
 #'
 #' @param betas Beta matrix (CpGs as rows, samples as columns)
-#' @param coef_df Data frame with CpG and weight columns
+#' @param coef_df Data frame, matrix, or named vector with CpG/weight info
 #' @param transform_func Optional transformation function to apply to results
 #' @return Named vector of clock values, or NULL on failure
 #' @keywords internal
 calc_weighted_sum_clock <- function(betas, coef_df, transform_func = NULL) {
 
-  # Auto-detect CpG column
-  cpg_candidates <- c("CpG", "CpGmarker", "probe", "Probe", "cpg", "ID")
-  cpg_col <- intersect(cpg_candidates, colnames(coef_df))[1]
-  if (is.na(cpg_col)) cpg_col <- colnames(coef_df)[1]
+  # Handle non-data.frame inputs (named vectors, single values, etc.)
+  if (is.null(coef_df)) return(NULL)
 
-  # Auto-detect weight column
-  weight_candidates <- c("Coefficient", "CoefficientTraining", "weight", "Weight", "coef", "beta")
-  weight_col <- intersect(weight_candidates, colnames(coef_df))[1]
-  if (is.na(weight_col)) {
-    numeric_cols <- sapply(coef_df, is.numeric)
-    numeric_cols[cpg_col] <- FALSE
-    weight_col <- names(which(numeric_cols))[1]
+  if (is.numeric(coef_df) && !is.matrix(coef_df) && !is.data.frame(coef_df)) {
+    # Named numeric vector: names are CpGs, values are weights
+    if (!is.null(names(coef_df))) {
+      coef_df <- data.frame(CpG = names(coef_df), Coefficient = as.numeric(coef_df),
+                            stringsAsFactors = FALSE)
+    } else {
+      return(NULL)
+    }
   }
 
-  if (is.na(weight_col)) return(NULL)
+  if (is.matrix(coef_df)) {
+    coef_df <- as.data.frame(coef_df, stringsAsFactors = FALSE)
+    # If matrix had rownames but no CpG column, use rownames
+    if (!is.null(rownames(coef_df)) && !any(sapply(coef_df, is.character))) {
+      coef_df$CpG <- rownames(coef_df)
+    }
+  }
+
+  if (!is.data.frame(coef_df) || ncol(coef_df) == 0) return(NULL)
+  if (nrow(coef_df) == 0) return(NULL)
+
+  # Auto-detect CpG column
+  cpg_candidates <- c("CpG", "CpGmarker", "probe", "Probe", "cpg", "ID",
+                       "ProbeID", "probe_id", "CpG_ID", "Marker")
+  cpg_col <- intersect(cpg_candidates, colnames(coef_df))[1]
+  if (is.na(cpg_col)) {
+    # Try first character column
+    char_cols <- which(sapply(coef_df, is.character) | sapply(coef_df, is.factor))
+    if (length(char_cols) > 0) {
+      cpg_col <- colnames(coef_df)[char_cols[1]]
+    } else if (!is.null(rownames(coef_df)) &&
+               any(grepl("^cg|^ch", rownames(coef_df), ignore.case = TRUE))) {
+      # Use rownames as CpG IDs
+      coef_df$CpG <- rownames(coef_df)
+      cpg_col <- "CpG"
+    } else {
+      cpg_col <- colnames(coef_df)[1]
+    }
+  }
+
+  # Auto-detect weight column
+  weight_candidates <- c("Coefficient", "CoefficientTraining", "weight", "Weight",
+                         "coef", "beta", "Beta", "Effect", "effect")
+  weight_col <- intersect(weight_candidates, colnames(coef_df))[1]
+  if (is.na(weight_col)) {
+    # Find first numeric column that's not the CpG column
+    numeric_cols <- which(sapply(coef_df, is.numeric))
+    numeric_cols <- setdiff(names(numeric_cols), cpg_col)
+    if (length(numeric_cols) > 0) {
+      weight_col <- numeric_cols[1]
+    }
+  }
+
+  if (is.na(weight_col) || is.null(weight_col)) return(NULL)
 
   cpgs <- as.character(coef_df[[cpg_col]])
   weights <- as.numeric(coef_df[[weight_col]])
@@ -122,6 +166,8 @@ calc_weighted_sum_clock <- function(betas, coef_df, transform_func = NULL) {
   } else {
     intercept <- 0
   }
+
+  if (length(cpgs) == 0) return(NULL)
 
   matched_idx <- match(cpgs, rownames(betas))
   valid <- !is.na(matched_idx)

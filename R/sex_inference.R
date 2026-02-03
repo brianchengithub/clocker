@@ -22,7 +22,21 @@ infer_sex_from_betas <- function(betas, platform = "EPIC", verbose = TRUE) {
   names(sex_pred) <- colnames(betas)
 
   # Get chromosome information from manifest
-  probe_chr <- get_probe_chromosomes(platform, verbose = FALSE)
+  # For normalized EPICv2 (base CpG names), try EPIC manifest first
+  probe_chr <- NULL
+  platforms_to_try <- platform
+  if (platform %in% c("EPICv2", "EPICv2/EPIC+")) {
+    platforms_to_try <- c("EPICv2", "EPIC", "HM450")
+  }
+
+  for (plt in platforms_to_try) {
+    probe_chr <- get_probe_chromosomes(plt, verbose = FALSE)
+    if (!is.null(probe_chr)) {
+      common <- length(intersect(names(probe_chr), rownames(betas)))
+      if (common > 1000) break  # Good match
+      probe_chr <- NULL  # Not enough overlap, try next
+    }
+  }
 
   if (is.null(probe_chr)) {
     if (verbose) message("    Could not load chromosome annotations")

@@ -117,6 +117,18 @@ calculate_clocks <- function(input, pheno = NULL, n_cores = NULL, verbose = TRUE
   log_msg("Detected platform: %s", platform, verbose = verbose)
 
   # ============================================================
+  # Normalize EPICv2 probe names (if applicable)
+  # EPICv2 probes have suffixes like _TC11 that prevent matching
+  # against clock coefficients, EpiDISH, and DunedinPACE.
+  # Must happen BEFORE imputation so reference betas can match.
+  # ============================================================
+
+  betas <- normalize_epicv2_probes(betas, verbose = verbose)
+
+  n_probes <- nrow(betas)  # Update after potential probe collapse
+  log_msg("Probes after normalization: %d", n_probes, verbose = verbose)
+
+  # ============================================================
   # Determine optimal thread count
   # ============================================================
 

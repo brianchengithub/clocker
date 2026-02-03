@@ -4,7 +4,7 @@ Title: Unified Epigenetic Clock Calculator
 Version: 2.0.0
 Date: 2025-01-09
 Authors@R: person("Brian", "Chen", role = c("aut", "cre"),
-                   email = "brian.chen4@ucsf.edu")
+                   email = "brian@foxotechnologies.com")
 Description: Calculate 40+ epigenetic clocks from DNA methylation data with a
     single function call. Integrates SeSAMe (IDAT preprocessing), EpiDISH
     (cell type deconvolution via RPC and CP methods), DunedinPACE, PC-Clocks,

@@ -124,6 +124,8 @@ compute_direct_clocks <- function(betas, results, verbose = TRUE) {
           if (!is.null(result) && length(result) == ncol(betas)) {
             results[[clock_name]] <- as.numeric(result)
             computed_direct <- c(computed_direct, clock_name)
+          } else if (verbose && is.null(result)) {
+            message("    ", clock_name, ": no matching probes found")
           }
         }, error = function(e) {
           if (verbose) message("    ", clock_name, " error: ", e$message)
@@ -191,15 +193,39 @@ compute_dunedin_pace <- function(betas, results, verbose = TRUE) {
   tryCatch({
     log_msg("  Calculating DunedinPACE...", verbose = verbose)
 
-    pace <- DunedinPACE::PACEProjector(betas)
+    # DunedinPACE expects probes as rows, samples as columns
+    # Ensure it's a proper matrix (critical for single-sample case)
+    betas_dp <- betas
+    if (!is.matrix(betas_dp)) {
+      betas_dp <- as.matrix(betas_dp)
+    }
+
+    # Force 2D even for single sample
+    if (is.null(dim(betas_dp))) {
+      probe_names <- names(betas_dp)
+      betas_dp <- matrix(betas_dp, ncol = 1,
+                         dimnames = list(probe_names, colnames(betas)[1]))
+    }
+
+    pace <- DunedinPACE::PACEProjector(betas_dp)
 
     if (!is.null(pace)) {
+      pace_val <- NULL
       if (is.list(pace) && "DunedinPACE" %in% names(pace)) {
-        results$DunedinPACE <- pace$DunedinPACE
+        pace_val <- pace$DunedinPACE
       } else if (is.data.frame(pace) && "DunedinPACE" %in% colnames(pace)) {
-        results$DunedinPACE <- pace$DunedinPACE
-      } else if (is.numeric(pace) && length(pace) == ncol(betas)) {
-        results$DunedinPACE <- pace
+        pace_val <- pace$DunedinPACE
+      } else if (is.numeric(pace)) {
+        pace_val <- pace
+      }
+
+      if (!is.null(pace_val)) {
+        # Handle single-value result
+        if (length(pace_val) == 1 && ncol(betas) == 1) {
+          results$DunedinPACE <- pace_val
+        } else if (length(pace_val) == ncol(betas)) {
+          results$DunedinPACE <- pace_val
+        }
       }
     }
   }, error = function(e) {
@@ -459,9 +485,13 @@ compute_additional_clocks <- function(betas, results, verbose = TRUE) {
               tryCatch(func(betas_t), error = function(e2) NULL)
             })
 
-            if (!is.null(result) && is.numeric(result) && length(result) == ncol(betas)) {
-              results[[clock]] <- as.numeric(result)
-              added_clocks <- c(added_clocks, clock)
+            if (!is.null(result) && is.numeric(result)) {
+              # Handle single-sample: result might be length 1
+              if (length(result) == ncol(betas) ||
+                  (length(result) == 1 && ncol(betas) == 1)) {
+                results[[clock]] <- as.numeric(result)
+                added_clocks <- c(added_clocks, clock)
+              }
             }
           }
         }, error = function(e) NULL)
