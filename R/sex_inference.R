@@ -13,13 +13,19 @@
 #' @param betas Beta value matrix (CpGs as rows, samples as columns)
 #' @param platform Platform name (EPIC, HM450, EPICv2, etc.)
 #' @param verbose Print progress
-#' @return Named vector of sex predictions (1 = Female, 0 = Male, 0.5 = Unknown)
+#' @return Named list with: x_median, y_median (numeric vectors), sex (character vector)
 #' @keywords internal
 infer_sex_from_betas <- function(betas, platform = "EPIC", verbose = TRUE) {
 
   n_samples <- ncol(betas)
-  sex_pred <- rep(0.5, n_samples)
-  names(sex_pred) <- colnames(betas)
+  result <- list(
+    x_median = rep(NA_real_, n_samples),
+    y_median = rep(NA_real_, n_samples),
+    sex = rep("U", n_samples)
+  )
+  names(result$x_median) <- colnames(betas)
+  names(result$y_median) <- colnames(betas)
+  names(result$sex) <- colnames(betas)
 
   # Get chromosome information from manifest
   # After EPICv2 normalization, probes are base CpG names (e.g., cg00000029).
@@ -44,14 +50,14 @@ infer_sex_from_betas <- function(betas, platform = "EPIC", verbose = TRUE) {
 
   if (is.null(probe_chr)) {
     if (verbose) message("    Could not load chromosome annotations")
-    return(sex_pred)
+    return(result)
   }
 
   common_probes <- intersect(names(probe_chr), rownames(betas))
 
   if (length(common_probes) == 0) {
     if (verbose) message("    No probes matched manifest")
-    return(sex_pred)
+    return(result)
   }
 
   x_probes <- common_probes[probe_chr[common_probes] %in% c("chrX", "X")]
@@ -63,31 +69,31 @@ infer_sex_from_betas <- function(betas, platform = "EPIC", verbose = TRUE) {
 
   if (length(x_probes) < 100 || length(y_probes) < 10) {
     if (verbose) message("    Insufficient sex chromosome probes for inference")
-    return(sex_pred)
+    return(result)
   }
 
   x_betas <- betas[x_probes, , drop = FALSE]
   y_betas <- betas[y_probes, , drop = FALSE]
 
-  x_median <- apply(x_betas, 2, median, na.rm = TRUE)
-  y_median <- apply(y_betas, 2, median, na.rm = TRUE)
+  result$x_median <- apply(x_betas, 2, median, na.rm = TRUE)
+  result$y_median <- apply(y_betas, 2, median, na.rm = TRUE)
 
   for (i in seq_len(n_samples)) {
-    if (y_median[i] > 0.2) {
-      sex_pred[i] <- 0       # Male
-    } else if (y_median[i] < 0.1 && x_median[i] > 0.3) {
-      sex_pred[i] <- 1       # Female
+    if (result$y_median[i] > 0.2) {
+      result$sex[i] <- "M"
+    } else if (result$y_median[i] < 0.1 && result$x_median[i] > 0.3) {
+      result$sex[i] <- "F"
     } else {
-      sex_pred[i] <- 0.5     # Ambiguous
+      result$sex[i] <- "U"
     }
   }
 
   if (verbose) {
-    n_male <- sum(sex_pred == 0)
-    n_female <- sum(sex_pred == 1)
-    n_unknown <- sum(sex_pred == 0.5)
+    n_male <- sum(result$sex == "M")
+    n_female <- sum(result$sex == "F")
+    n_unknown <- sum(result$sex == "U")
     message("    Sex inference: ", n_female, " Female, ", n_male, " Male, ", n_unknown, " Unknown")
   }
 
-  return(sex_pred)
+  return(result)
 }

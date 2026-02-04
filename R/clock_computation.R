@@ -169,12 +169,12 @@ compute_sex_inference <- function(betas, results, verbose = TRUE) {
                 else if (n_probes > 400000) "HM450"
                 else "EPIC"
 
-    sex_numeric <- infer_sex_from_betas(betas, platform = platform, verbose = verbose)
+    sex_result <- infer_sex_from_betas(betas, platform = platform, verbose = verbose)
 
-    if (!is.null(sex_numeric) && length(sex_numeric) == ncol(betas)) {
-      results$InferredSex_Numeric <- sex_numeric
-      results$InferredSex <- ifelse(sex_numeric == 1, "F",
-                                    ifelse(sex_numeric == 0, "M", "U"))
+    if (is.list(sex_result) && length(sex_result$sex) == ncol(betas)) {
+      results$chrX_median <- sex_result$x_median
+      results$chrY_median <- sex_result$y_median
+      results$InferredSex <- sex_result$sex
     }
   }, error = function(e) {
     if (verbose) message("    Sex inference failed: ", e$message)
@@ -332,20 +332,16 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
     # Get Female values
     # PC clocks require Female to be integerish (0 or 1), not 0.5
     if (!is.null(pheno) && is.data.frame(pheno) && "Female" %in% colnames(pheno)) {
-      female_values <- pheno$Female
+      female_values <- as.integer(pheno$Female)
       if (verbose) message("    Using provided Female")
-    } else if ("InferredSex_Numeric" %in% colnames(results)) {
-      female_values <- results$InferredSex_Numeric
-      if (verbose) message("    Using InferredSex_Numeric as Female")
+    } else if ("InferredSex" %in% colnames(results)) {
+      # Derive from InferredSex: F=1, M=0, U=0 (default to male if unknown)
+      female_values <- as.integer(results$InferredSex == "F")
+      if (verbose) message("    Using InferredSex as Female (F=1, M/U=0)")
     } else {
-      female_values <- rep(0, length(sample_ids))
+      female_values <- rep(0L, length(sample_ids))
       if (verbose) message("    Warning: No sex available, defaulting Female=0")
     }
-
-    # calcPCClocks requires Female to be integer 0 or 1
-    # Round any ambiguous values (0.5 = Unknown) to nearest integer
-    female_values <- as.integer(round(female_values))
-    female_values[is.na(female_values)] <- 0L
 
     pheno_df <- data.frame(
       Sample_ID = sample_ids,
