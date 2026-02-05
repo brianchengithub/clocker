@@ -1,10 +1,10 @@
 # 'quickclocks' (Unified Epigenetic Clock Calculator)
 
-A comprehensive R package for calculating 40+ epigenetic clocks from DNA methylation data. Integrates clocks from multiple research labs into a single, easy-to-use interface with a single function call. Accepts many inputs formats -- e.g., directory of IDAT files or beta matrix. 
+A comprehensive R package for calculating most widely used epigenetic clocks from DNA methylation data. Integrates clocks from multiple research labs into a single, easy-to-use interface with a single function call. Accepts many inputs formats -- e.g., directory of IDAT files or beta matrix. 
 
 ## Features
 
-- **40+ Epigenetic Clocks** from multiple research groups
+- **Epigenetic Clocks** from multiple research groups
 - **Single Function Interface** - one call calculates everything
 - **Automatic Input Detection** - works with IDAT files or beta matrices
 - **EpiDISH Cell Deconvolution** - RPC and CP methods for 7 blood cell types
@@ -16,9 +16,9 @@ A comprehensive R package for calculating 40+ epigenetic clocks from DNA methyla
 
 | Platform | Probes | Status |
 |----------|--------|--------|
-| EPICv2 / EPIC+ | ~930,000 | ✅ Fully supported |
-| EPIC (v1) | ~865,000 | ✅ Fully supported |
-| 450K | ~485,000 | ✅ Fully supported |
+| EPICv2 / EPIC+ | ~930,000 | ✅ Supported |
+| EPIC (v1) | ~865,000 | ✅ Supported |
+| 450K | ~485,000 | ✅ Supported |
 | 27K | ~27,000 | ✅ Supported |
 | MSA | ~285,000 | ✅ Supported |
 
@@ -71,7 +71,7 @@ results <- calculate_clocks("/data/methylation/idats/")
 
 **Beta Matrix:**
 ```r
-# Provide a pre-processed beta matrix
+# Provide a pre-processed beta matrix (rows=CpGs, columns=Samples)
 results <- calculate_clocks(beta_matrix)
 ```
 - Rows: CpG probe IDs (e.g., "cg00000029")
@@ -333,12 +333,4 @@ MIT License - See [LICENSE](LICENSE) file.
 
 Contributions welcome! Please open an issue or submit a pull request.
 
-## Changelog
-
-### v1.0.0
-- Single function interface (`calculate_clocks()`)
-- EpiDISH cell deconvolution (RPC + CP methods)
-- PC clocks with automatic phenotype inference
-- Horvath age transformation fix
-- qs2 caching for improved performance
-- Chromosome-based sex inference
+ 
