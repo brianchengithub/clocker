@@ -3718,68 +3718,52 @@ ggplot(results, aes(x = Pct_Cor_Lost, y = Delta_Z)) +#
   theme_minimal(base_size = 14)#
 #
 ggsave("deltaZ_calibration_curve.png", width = 8, height = 6, dpi = 300)
-setwd("/Users/bc/Documents/GitHub/clocker/")#
-unlink("R/*.R")
-devtools::document()#
-devtools::install()
 detach("package:clocker", unload = TRUE)#
+pak::cache_clean()#
 remove.packages("clocker")#
 pak::pak("brianchengithub/clocker")
-library(clocker)
-# Actual data#
-beta_matrix = readRDS("/Users/bc/Documents/gestalt/analysis/qc/BM/betas_all.rds")#
-result2 = clocker(beta_matrix, verbose=FALSE)#
- print(result2$Clock_Horvath1)
-setwd("/Users/bc/Documents/GitHub/clocker/")
-# Verify R/ is currently empty (or has stale files)#
-list.files("R/")
-file.copy(#
-  list.files("clocker_v2.2.4/R", full.names = TRUE),#
-  "R/",#
-  overwrite = TRUE#
-)
-file.copy(#
-  list.files("/Users/bc/Downloads/clocker_v2.2.4/R", full.names = TRUE),#
-  "R/",#
-  overwrite = TRUE#
-)
-detach("package:clocker", unload = TRUE)#
-pak::cache_clean()                          # in case pak cached an older commit#
-remove.packages("clocker")#
-pak::pak("brianchengithub/clocker")#
-library(clocker)#
-packageVersion("clocker")                   # should print 2.2.4#
-#
-result2 <- clocker(beta_matrix, verbose = FALSE)#
-# (should produce zero stdout)#
-warnings()                                  # may show pheno-fallback alerts
-# In the package root#
-all_exports <- c("clocker", "qclock", "calculate_clocks", "run_epigenetic_clocks", "set_sex_reference")#
-r_files <- list.files("R/", full.names = TRUE)#
-cat("R files:", length(r_files), "\n")#
-for (fn in all_exports) {#
-  found <- any(sapply(r_files, function(f)#
-    any(grepl(paste0("^", fn, "\\s*<-\\s*function"),#
-              readLines(f, warn = FALSE)))))#
-  cat(sprintf("  %-25s %s\n", fn, if (found) "OK" else "MISSING"))#
-}
-setwd("/Users/bc/Documents/GitHub/clocker/")#
-#
-# Confirm R/ has the 12 files#
-list.files("R/")  # should show 12 files including clocker.R#
-#
-# Regenerate NAMESPACE from the populated R/#
-devtools::document()#
-# THIS TIME it should write 50+ Rd files and NOT warn about missing exports
-detach("package:clocker", unload = TRUE)#
 pak::cache_clean()#
 remove.packages("clocker")#
 pak::pak("brianchengithub/clocker")
 library(clocker)
 packageVersion("clocker")
-clocker                            # should print the function definition
-# After devtools::document(), before committing:#
-ns <- readLines("NAMESPACE")#
-n_exports <- length(grep("^export\\(", ns))#
-cat("NAMESPACE exports:", n_exports, "\n")#
-cat("Has 'export(clocker)':", "export(clocker)" %in% ns, "\n")
+clocker
+beta_matrix <- readRDS("/Users/bc/Documents/gestalt/analysis/qc/BM/betas_all.rds")#
+result2 <- clocker(beta_matrix, verbose = FALSE)#
+# (zero stdout)#
+warnings()                           # may show pheno-fallback alerts
+pak::cache_clean()#
+remove.packages("clocker")#
+pak::pak("brianchengithub/clocker")
+library(clocker)#
+packageVersion("clocker")
+pak::cache_clean()
+remove.packages("clocker")
+pak::pak("brianchengithub/clocker")
+library(clocker)
+packageVersion("clocker")
+# Read the installed cell_deconvolution.R from the library and check for our v2.2.5 marker#
+library_path <- system.file("R", "clocker", package = "clocker")#
+cat(library_path, "\n")
+library(clocker)#
+# This should show the v2.2.5 wrapper if it was applied#
+body(clocker:::estimate_cell_composition)
+setwd("/Users/bc/Documents/GitHub/clocker/")#
+#
+# Check for the v2.2.5-specific code in each file#
+cell_src <- readLines("R/cell_deconvolution.R")#
+cat("v2.2.5 marker in cell_deconvolution.R: ",#
+    any(grepl("suppressMessages\\(\\s*$|suppressMessages\\(EpiDISH", cell_src)),#
+    "\n", sep="")#
+#
+clock_src <- readLines("R/clock_computation.R")#
+cat("v2.2.5 marker in clock_computation.R (DunedinPACE): ",#
+    any(grepl("suppressMessages\\(DunedinPACE::PACEProjector", clock_src)),#
+    "\n", sep="")#
+cat("v2.2.5 marker in clock_computation.R (PC nested capture): ",#
+    any(grepl('type = "message"', clock_src)),#
+    "\n", sep="")
+# Actual data#
+beta_matrix = readRDS("/Users/bc/Documents/gestalt/analysis/qc/BM/betas_all.rds")#
+result2 = clocker(beta_matrix, verbose=FALSE)#
+ print(result2$Clock_Horvath1)
