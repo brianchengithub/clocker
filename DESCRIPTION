@@ -1,9 +1,9 @@
 Package: clocker
 Type: Package
 Title: Unified Epigenetic Clock Calculator
-Version: 2.2.0
-Authors@R: person("Kris", "[Last]", role = c("aut", "cre"),
-                  email = "you@example.com")
+Version: 2.2.4
+Authors@R: person("Brian", "Chen", role = c("aut", "cre"),
+                  email = "brianchen450k@gmail.com")
 Description: A unified interface for calculating 40+ epigenetic aging clocks
     from DNA methylation data. Handles raw IDAT files (via SeSAMe) and
     pre-processed beta matrices, including EPICv2 array support. Includes
@@ -35,4 +35,4 @@ Suggests:
     progress,
     curl
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.3
+RoxygenNote: 7.3.0

@@ -17,7 +17,7 @@ clock projection automatically.
 - **EPICv2 native**: probe-name normalization with EPIC/450K position
   matching where possible
 - **kNN imputation** with reference-mean zero-shot fallback
-- **Sex inference** (exact algorithm, verified bit-for-bit)
+- **methylQC-style sex inference** (exact algorithm, verified bit-for-bit)
 - **EpiDISH cell deconvolution** (RPC + CP, 7 blood cell types)
 - **PC-Clocks** with automatic Age/Female fallback when pheno is missing
 - **Embedded coefficients** for the small clocks — no external R-package
@@ -49,8 +49,7 @@ source("install_dependencies.R")
 Then install clocker from GitHub:
 
 ```r
-install.packages("pak")           # one-time
-pak::pak("brianchengithub/clocker")
+devtools::install_github("<your-username>/clocker")
 ```
 
 The installer pulls the required Bioconductor (`sesame`, `EpiDISH`) and
@@ -64,7 +63,7 @@ also installed; clocker has graceful fallbacks if any are missing.
 library(clocker)
 
 # All clocks from an IDAT directory
-results <- clocker("/filepath/idats/")
+results <- clocker("/data/methylation/idats/")
 
 # Or from a pre-processed beta matrix (CpGs x samples, [0, 1] values)
 results <- clocker(beta_matrix)
@@ -92,6 +91,11 @@ results <- clocker(
   verbose                 = TRUE
 )
 ```
+
+### Backward-compat aliases (deprecated but still working)
+
+`qclock()`, `calculate_clocks()`, and `run_epigenetic_clocks()` all call
+`clocker()` and emit a deprecation warning.
 
 ## Output
 
@@ -122,12 +126,12 @@ Per-sample imputation diagnostics are stashed in
 1. **Load + validate.** IDAT files go through SeSAMe (`openSesame(prep="QCDPB")`).
    Beta matrices are sanity-checked and clipped to `[0, 1]`. Robust
    M-value detection (median + IQR) auto-converts M-values when needed.
-2. **EPICv2 harmonization.** Suffix-bearing probe names (`cg00000029_TC11`)
+2. **EPICv2 normalization.** Suffix-bearing probe names (`cg00000029_TC11`)
    are mapped to base CpG IDs. When multiple replicates exist, the one
    matching the original EPIC v1 / 450K probe by genomic position +
    design + strand is preferred over averaging.
 3. **kNN imputation** with reference-mean zero-shot fallback. See [Imputation](#imputation) below.
-4. **Sex inference.** Exact port of methylQC's algorithm —
+4. **methylQC sex inference.** Exact port of methylQC's algorithm —
    curated chrX/chrY probe panel, threshold sweep, cluster regression,
    ±5σ orthogonal-distance bands. Bit-for-bit verified against the
    methylQC reference. See [Sex inference](#sex-inference) below.
@@ -237,6 +241,7 @@ clocker/
 ├── NAMESPACE
 ├── README.md
 ├── METHODS.md
+├── CHANGES.md
 ├── install_dependencies.R       # One-time dependency setup
 ├── diagnose_packages.R          # Troubleshooting utility
 ├── R/

@@ -183,7 +183,7 @@ calc_weighted_sum_clock <- function(betas, coef_df,
 #' algorithm description.)
 #'
 #' @keywords internal
-calc_epitoc2_direct <- function(betas, coeffs) {
+calc_epitoc2_direct <- function(betas, coeffs, verbose = TRUE) {
 
   estETOC2 <- NULL
   if ("dataETOC3.l" %in% names(coeffs)) {
@@ -205,7 +205,9 @@ calc_epitoc2_direct <- function(betas, coeffs) {
   n_valid <- sum(valid)
   if (n_valid == 0L) return(NULL)
 
-  message(sprintf("    epiTOC2: Using %d of %d CpGs", n_valid, length(cpgs)))
+  if (verbose) {
+    message(sprintf("    epiTOC2: Using %d of %d CpGs", n_valid, length(cpgs)))
+  }
 
   betas_matched <- betas[matched_idx[valid], , drop = FALSE]
   params_matched <- estETOC2[valid, , drop = FALSE]

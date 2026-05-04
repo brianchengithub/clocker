@@ -218,7 +218,7 @@ compute_direct_clocks <- function(betas, results, verbose = TRUE) {
 
     # epiTOC2
     tryCatch({
-      toc2 <- calc_epitoc2_direct(betas, coeffs)
+      toc2 <- calc_epitoc2_direct(betas, coeffs, verbose = verbose)
       if (!is.null(toc2) && length(toc2) == ncol(betas)) {
         results$epiTOC2_TNSC <- toc2
         computed_direct <- c(computed_direct, "epiTOC2_TNSC")
@@ -413,15 +413,18 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
     if (!is.null(pheno) && "Age" %in% colnames(pheno) && !all(is.na(pheno$Age))) {
       age_values <- pheno$Age
     } else if ("Horvath2" %in% colnames(results) && !all(is.na(results$Horvath2))) {
-      message("  PC-Clocks: 'Age' not provided; using Horvath2 estimate as Age")
+      msg <- "PC-Clocks: 'Age' not provided; using Horvath2 estimate as Age"
+      if (verbose) message("  ", msg) else warning(msg, call. = FALSE)
       age_values <- results$Horvath2
       age_source <- "Horvath2_estimate"
     } else if ("Horvath1" %in% colnames(results) && !all(is.na(results$Horvath1))) {
-      message("  PC-Clocks: 'Age' not provided; Horvath2 unavailable; falling back to Horvath1")
+      msg <- "PC-Clocks: 'Age' not provided; Horvath2 unavailable; falling back to Horvath1"
+      if (verbose) message("  ", msg) else warning(msg, call. = FALSE)
       age_values <- results$Horvath1
       age_source <- "Horvath1_estimate"
     } else {
-      warning("PC-Clocks: no Age available (pheno missing, Horvath unavailable). Skipping PC-Clocks.")
+      warning("PC-Clocks: no Age available (pheno missing, Horvath unavailable). Skipping PC-Clocks.",
+              call. = FALSE)
       return(results)
     }
 
@@ -431,11 +434,13 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
         !all(is.na(pheno$Female))) {
       female_values <- as.integer(pheno$Female)
     } else if ("InferredSex" %in% colnames(results)) {
-      message("  PC-Clocks: 'Female' not provided; using InferredSex (F=1, M/U=0)")
+      msg <- "PC-Clocks: 'Female' not provided; using InferredSex (F=1, M/U=0)"
+      if (verbose) message("  ", msg) else warning(msg, call. = FALSE)
       female_values <- as.integer(results$InferredSex == "F")
       female_source <- "inferred_sex"
     } else {
-      message("  PC-Clocks: 'Female' not provided and sex not inferred; defaulting to 0 (Male)")
+      msg <- "PC-Clocks: 'Female' not provided and sex not inferred; defaulting to 0 (Male)"
+      if (verbose) message("  ", msg) else warning(msg, call. = FALSE)
       female_values <- rep(0L, length(sample_ids))
       female_source <- "default_male"
     }
