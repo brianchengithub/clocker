@@ -542,13 +542,32 @@ compute_mitotic_clocks <- function(betas, results, verbose = TRUE) {
     }, add = TRUE)
 
     if (exists("EpiMitClocks", envir = asNamespace(epi_pkg))) {
+      # EpiMitClocks internally calls data("dataETOC3") etc. without an
+      # envir argument, which emits "data set X not found" warnings even
+      # when the objects are already loaded into .GlobalEnv. It also
+      # prints per-clock coverage lines via print(). We capture both
+      # streams and replay them only under verbose to keep the log tidy.
+      epi_stdout <- character()
       epi_results <- tryCatch({
-        get("EpiMitClocks", envir = asNamespace(epi_pkg))(
-          data.m = betas, ages.v = NULL)
+        epi_stdout <- utils::capture.output(
+          out <- suppressWarnings(
+            get("EpiMitClocks", envir = asNamespace(epi_pkg))(
+              data.m = betas, ages.v = NULL)
+          )
+        )
+        out
       }, error = function(e) {
         if (verbose) message("    EpiMitClocks failed: ", e$message)
         NULL
       })
+
+      if (verbose && length(epi_stdout) > 0L) {
+        for (line in epi_stdout) {
+          # Strip R's '[1] "..."' wrapper if present
+          clean <- sub('^\\[1\\] "', "", sub('"$', "", line))
+          message("    EpiMitClocks: ", clean)
+        }
+      }
 
       if (!is.null(epi_results) && is.data.frame(epi_results) &&
           nrow(epi_results) == ncol(betas)) {
@@ -558,7 +577,8 @@ compute_mitotic_clocks <- function(betas, results, verbose = TRUE) {
           }
         }
         if (verbose) {
-          message("    EpiMitClocks: ", paste(colnames(epi_results), collapse = ", "))
+          message("    EpiMitClocks added: ",
+                   paste(colnames(epi_results), collapse = ", "))
         }
       }
     }
