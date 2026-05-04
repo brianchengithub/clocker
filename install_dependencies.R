@@ -1,207 +1,181 @@
 #!/usr/bin/env Rscript
-#' ============================================================================
-#' Install Dependencies for 'quickclocks' Epigenetic Clock Calculator
-#' ============================================================================
-#' 
-#' This script installs all required packages from CRAN, Bioconductor, and GitHub.
-#' Run this script before using the epigenetic clock calculator:
-#' 
-#'   source("install_dependencies.R")
-#'
-#' After installation, use the package with:
-#' 
-#'   source("R/calculate_clocks.R")
-#'   results <- calculate_clocks("/path/to/idats")
-#'   results <- calculate_clocks(my_beta_matrix)
-#'
+# ============================================================================
+# Install Dependencies for the 'clocker' Epigenetic Clock Calculator
+# ============================================================================
+#
+# Run once before installing/using clocker:
+#
+#   source("install_dependencies.R")
+#
+# Then install clocker itself:
+#
+#   devtools::install_github("<your-username>/clocker")
+#   library(clocker)
+#   results <- clocker("/path/to/idats")
+#
+# This script installs a minimal, curated set of dependencies. Optional
+# packages (qs2, progress, digest, matrixStats, curl) are also installed
+# because clocker uses them when available and falls back gracefully when
+# they are not.
 
 cat("============================================================\n")
-cat("Epigenetic Clock Calculator - Dependency Installation\n")
+cat("clocker - Dependency Installation\n")
 cat("============================================================\n\n")
 
-#' Helper function to install if missing
+
+# ---- Helper -----------------------------------------------------------------
+
 install_if_missing <- function(pkg, source = "CRAN", repo = NULL) {
-  if (!requireNamespace(pkg, quietly = TRUE)) {
-    cat(sprintf("Installing %s from %s...\n", pkg, source))
-    
-    result <- tryCatch({
-      if (source == "CRAN") {
-        install.packages(pkg, repos = "https://cloud.r-project.org", quiet = TRUE)
-      } else if (source == "Bioconductor") {
-        if (!requireNamespace("BiocManager", quietly = TRUE)) {
-          install.packages("BiocManager", repos = "https://cloud.r-project.org", quiet = TRUE)
-        }
-        BiocManager::install(pkg, ask = FALSE, update = FALSE, quiet = TRUE)
-      } else if (source == "GitHub") {
-        if (!requireNamespace("devtools", quietly = TRUE)) {
-          install.packages("devtools", repos = "https://cloud.r-project.org", quiet = TRUE)
-        }
-        devtools::install_github(repo, quiet = TRUE, upgrade = "never")
-      }
-      TRUE
-    }, error = function(e) {
-      cat(sprintf("  WARNING: Failed to install %s: %s\n", pkg, e$message))
-      FALSE
-    })
-    
-    if (result && requireNamespace(pkg, quietly = TRUE)) {
-      cat(sprintf("  SUCCESS: %s installed\n", pkg))
-    } else {
-      cat(sprintf("  FAILED: %s could not be installed\n", pkg))
-    }
-    return(result)
-  } else {
-    cat(sprintf("  SKIP: %s already installed\n", pkg))
+  if (requireNamespace(pkg, quietly = TRUE)) {
+    cat(sprintf("  SKIP    %-30s (already installed)\n", pkg))
     return(TRUE)
+  }
+  cat(sprintf("  INSTALL %-30s from %s\n", pkg, source))
+  ok <- tryCatch({
+    if (source == "CRAN") {
+      install.packages(pkg, repos = "https://cloud.r-project.org", quiet = TRUE)
+    } else if (source == "Bioconductor") {
+      if (!requireNamespace("BiocManager", quietly = TRUE)) {
+        install.packages("BiocManager",
+                         repos = "https://cloud.r-project.org", quiet = TRUE)
+      }
+      BiocManager::install(pkg, ask = FALSE, update = FALSE, quiet = TRUE)
+    } else if (source == "GitHub") {
+      if (!requireNamespace("devtools", quietly = TRUE)) {
+        install.packages("devtools",
+                         repos = "https://cloud.r-project.org", quiet = TRUE)
+      }
+      devtools::install_github(repo, quiet = TRUE, upgrade = "never")
+    }
+    TRUE
+  }, error = function(e) {
+    cat(sprintf("    WARNING: %s failed: %s\n", pkg, e$message))
+    FALSE
+  })
+  if (ok && requireNamespace(pkg, quietly = TRUE)) {
+    cat(sprintf("    OK      %s\n", pkg))
+    TRUE
+  } else {
+    cat(sprintf("    FAILED  %s\n", pkg))
+    FALSE
   }
 }
 
-# ============================================================================
-# CRAN Packages
-# ============================================================================
-cat("\n--- Installing CRAN packages ---\n")
+
+# ---- CRAN -------------------------------------------------------------------
+# Only what clocker actually uses (or uses optionally with a fallback).
+cat("\n--- CRAN packages ---\n")
 
 cran_packages <- c(
-  "devtools",       # For GitHub installation
-  "remotes",        # Alternative GitHub installation
-  "parallel",       # Parallel processing (base R)
-  "doParallel",     # Parallel backend
-  "foreach",        # Parallel loops
-  "data.table",     # Fast data manipulation
-  "matrixStats",    # Matrix operations
-  "tidyverse",      # Data manipulation
-  "R.utils",        # Utility functions
-  "yaml",           # Config file parsing
-  "optparse",       # Command-line parsing
-  "crayon",         # Colored console output
-  "progress",       # Progress bars
-  "impute",         # Imputation (may also be on Bioconductor)
-  "qs2"             # Fast serialization (required for PC clocks data)
+  "devtools",       # for install_github (used to install clocker itself)
+  "remotes",        # alternative to devtools
+  # Optional but recommended (clocker has graceful fallbacks for all of these):
+  "matrixStats",    # vectorized rowMedians / colMedians
+  "qs2",            # fast binary I/O for cached manifests + PC-Clocks data
+  "digest",         # SHA-256 verification of cached PC-Clocks data
+  "progress",       # nicer progress bars
+  "curl"            # robust downloads with retry
 )
 
-cran_results <- sapply(cran_packages, function(pkg) {
-  install_if_missing(pkg, "CRAN")
-})
+cran_results <- vapply(cran_packages,
+                       function(pkg) install_if_missing(pkg, "CRAN"),
+                       logical(1))
 
-# ============================================================================
-# Bioconductor Packages
-# ============================================================================
-cat("\n--- Installing Bioconductor packages ---\n")
 
-# Install BiocManager first
+# ---- Bioconductor -----------------------------------------------------------
+cat("\n--- Bioconductor packages ---\n")
+
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
-  cat("Installing BiocManager...\n")
-  install.packages("BiocManager", repos = "https://cloud.r-project.org", quiet = TRUE)
+  install.packages("BiocManager",
+                   repos = "https://cloud.r-project.org", quiet = TRUE)
 }
 
 bioc_packages <- c(
-  # Core SeSAMe packages
-  "sesame",
-  "sesameData",
-  
-  # Illumina array annotations
-  "IlluminaHumanMethylation27kmanifest",
-  "IlluminaHumanMethylation450kmanifest",
-  "IlluminaHumanMethylationEPICmanifest",
-  "IlluminaHumanMethylationEPICv2manifest",
-  
-  "IlluminaHumanMethylation27kanno.ilmn12.hg19",
-  "IlluminaHumanMethylation450kanno.ilmn12.hg19",
-  "IlluminaHumanMethylationEPICanno.ilm10b4.hg19",
-  
-  # Other useful packages
-  "minfi",
-  "GenomicRanges",
-  "SummarizedExperiment",
-  "impute",  # KNN imputation
-  
-  # Cell type deconvolution
-  "EpiDISH"  # RPC, CP, CBS methods with 7 and 12 cell type references
+  # Required only if you read IDAT files directly:
+  "sesame",       # IDAT preprocessing (NOOB, dye bias, pOOBAH)
+  "sesameData",   # SeSAMe annotation cache
+
+  # Required for cell-type deconvolution (recommended; small):
+  "EpiDISH"       # RPC + CP cell composition
 )
 
-bioc_results <- sapply(bioc_packages, function(pkg) {
-  install_if_missing(pkg, "Bioconductor")
-})
+bioc_results <- vapply(bioc_packages,
+                       function(pkg) install_if_missing(pkg, "Bioconductor"),
+                       logical(1))
 
-# ============================================================================
-# GitHub Packages
-# ============================================================================
-cat("\n--- Installing GitHub packages ---\n")
-cat("Note: Some packages may require manual installation if automatic fails.\n\n")
+
+# ---- GitHub-only packages ---------------------------------------------------
+cat("\n--- GitHub packages ---\n")
+cat("  (skip any you do not need — clocker degrades gracefully)\n")
 
 github_packages <- list(
-  list(pkg = "DunedinPACE", repo = "danbelsky/DunedinPACE"),
-  list(pkg = "EpiMitClocks", repo = "aet21/EpiMitClocks"),
-  list(pkg = "methylCIPHER", repo = "HigginsChenLab/methylCIPHER")
+  list(pkg = "DunedinPACE",   repo = "danbelsky/DunedinPACE"),
+  list(pkg = "EpiMitClocks",  repo = "aet21/EpiMitClocks"),
+  list(pkg = "methylCIPHER",  repo = "MorganLevineLab/methylCIPHER")
 )
 
-github_results <- sapply(github_packages, function(item) {
-  install_if_missing(item$pkg, "GitHub", item$repo)
-})
+github_results <- vapply(github_packages,
+                         function(item)
+                           install_if_missing(item$pkg, "GitHub", item$repo),
+                         logical(1))
 
-# ============================================================================
-# Installation Summary
-# ============================================================================
+
+# ---- Summary ---------------------------------------------------------------
 cat("\n============================================================\n")
-cat("Installation Summary\n")
+cat("Installation summary\n")
 cat("============================================================\n\n")
 
-# CRAN summary
-cat("CRAN Packages:\n")
-for (i in seq_along(cran_packages)) {
-  status <- if (cran_results[i]) "OK" else "FAILED"
-  cat(sprintf("  [%s] %s\n", status, cran_packages[i]))
+print_block <- function(label, names_vec, ok_vec) {
+  cat(label, ":\n", sep = "")
+  for (i in seq_along(names_vec)) {
+    cat(sprintf("  [%-3s] %s\n",
+                if (ok_vec[i]) "OK" else "FAIL", names_vec[i]))
+  }
+  cat("\n")
 }
+print_block("CRAN",          cran_packages,                              cran_results)
+print_block("Bioconductor",  bioc_packages,                              bioc_results)
+print_block("GitHub",        vapply(github_packages, `[[`, "", "pkg"),   github_results)
 
-# Bioconductor summary
-cat("\nBioconductor Packages:\n")
-for (i in seq_along(bioc_packages)) {
-  status <- if (bioc_results[i]) "OK" else "FAILED"
-  cat(sprintf("  [%s] %s\n", status, bioc_packages[i]))
-}
 
-# GitHub summary
-cat("\nGitHub Packages:\n")
-for (i in seq_along(github_packages)) {
-  status <- if (github_results[i]) "OK" else "FAILED"
-  cat(sprintf("  [%s] %s (%s)\n", status, github_packages[[i]]$pkg, github_packages[[i]]$repo))
-}
-
-# Overall status
-all_ok <- all(c(cran_results, bioc_results, github_results))
-
-cat("\n============================================================\n")
-if (all_ok) {
-  cat("All dependencies installed successfully!\n")
-  cat("You can now use the epigenetic clock calculator.\n")
-} else {
-  cat("Some packages failed to install.\n")
-  cat("Please check the errors above and try installing manually.\n")
-  cat("\nCommon issues:\n")
-  cat("  - GitHub rate limits: Use a personal access token\n")
-  cat("  - Bioconductor version: Run BiocManager::install(version = '3.18')\n")
-  cat("  - System dependencies: Install system libraries for compilation\n")
-}
-cat("============================================================\n")
-
-# ============================================================================
-# Download SeSAMe Data
-# ============================================================================
-cat("\n--- Downloading SeSAMe reference data ---\n")
-
+# ---- Optional: pre-cache SeSAMe annotation ---------------------------------
 if (requireNamespace("sesameData", quietly = TRUE)) {
-  tryCatch({
-    cat("Caching EPIC annotation data...\n")
-    sesameData::sesameDataCache("EPIC")
-    cat("Caching 450K annotation data...\n")
-    sesameData::sesameDataCache("HM450")
-    cat("SeSAMe data cached successfully.\n")
-  }, error = function(e) {
-    cat(sprintf("Warning: Could not cache SeSAMe data: %s\n", e$message))
-    cat("Run sesameData::sesameDataCache() manually if needed.\n")
-  })
+  cat("--- Pre-caching SeSAMe annotation data ---\n")
+  for (plat in c("EPIC", "HM450")) {
+    res <- tryCatch({
+      sesameData::sesameDataCache(plat)
+      TRUE
+    }, error = function(e) {
+      cat(sprintf("  WARNING: failed to cache %s: %s\n", plat, e$message))
+      FALSE
+    })
+    if (isTRUE(res)) cat(sprintf("  OK  %s annotation cached\n", plat))
+  }
 } else {
-  cat("SeSAMe not available for data caching.\n")
+  cat("--- SeSAMe annotation pre-caching skipped (sesameData unavailable) ---\n")
 }
 
-cat("\nDependency installation complete.\n")
+
+# ---- Final messages ---------------------------------------------------------
+cat("\n============================================================\n")
+all_required <- all(c(cran_results[c("devtools", "remotes")],
+                       bioc_results[c("sesame", "EpiDISH")]))
+if (all_required) {
+  cat("Required dependencies installed. You can now run:\n")
+  cat("  devtools::install_github(\"<your-username>/clocker\")\n")
+  cat("  library(clocker)\n")
+  cat("  results <- clocker(\"/path/to/idats\")\n")
+} else {
+  cat("WARNING: some required dependencies failed.\n")
+  cat("Re-check the log above. Common issues:\n")
+  cat("  - GitHub rate limit: set GITHUB_PAT environment variable\n")
+  cat("  - Bioconductor version mismatch: BiocManager::install(version = '...')\n")
+  cat("  - System libraries missing: see each package's INSTALL notes\n")
+}
+cat("\nNotes on optional packages:\n")
+cat("  - DunedinPACE / methylCIPHER / EpiMitClocks: clocker computes only\n")
+cat("    the clocks whose backing packages are available.\n")
+cat("  - PC-Clocks training data (~2 GB) downloads on first use to\n")
+cat("    tools::R_user_dir(\"clocker\", \"cache\") (override via\n")
+cat("    options(clocker.cache_dir = ...) or env CLOCKER_CACHE).\n")
+cat("============================================================\n")

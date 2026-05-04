@@ -1,211 +1,149 @@
 # ============================================================================
-# Input Processing Functions
-# IDAT loading, reference beta loading, imputation
+# Input Processing
+#
+# Handles IDAT file loading via SeSAMe and beta matrix preparation.
+# When loading IDATs, also computes per-sample chrX/chrY *total signal
+# intensities* from the SigDFs (the methylQC sex caller's preferred input)
+# and caches them in .qc_env so SigDFs themselves can be released after
+# beta extraction. Beta-only inputs skip this step; sex inference then
+# falls back to a beta-proxy that uses the same downstream algorithm.
 # ============================================================================
 
 
-#' Load IDAT files from directory using SeSAMe
-#' @param idat_dir Path to directory containing IDAT files
-#' @param verbose Print progress
-#' @return Beta matrix (probes as rows, samples as columns)
+#' Process IDAT files using SeSAMe
+#'
+#' Pipeline applied: "QCDPB" (QC, Detection p-value, Pval drop, Background,
+#' BMIQ). SigDFs are processed streaming so we never keep the full SigDF
+#' list in memory:
+#'   1. Run openSesame to get one SigDF per sample
+#'   2. For each SigDF: compute sex intensities (chrX, chrY) into a small
+#'      data.frame, cache via cache_sex_signals()
+#'   3. Extract betas via getBetas(sdf) and cbind into a matrix
+#'   4. Drop SigDFs
+#'
+#' Single-sample handling (FIX H6): when a single .idat path is supplied,
+#' the underlying sample basename is preserved in colnames(betas) rather
+#' than being replaced by an arbitrary index.
+#'
 #' @keywords internal
-load_idat_directory <- function(idat_dir, verbose = TRUE) {
+process_idat_files <- function(input, n_cores, verbose) {
 
   if (!requireNamespace("sesame", quietly = TRUE)) {
-    stop("Package 'sesame' is required for IDAT processing.\n",
+    stop("sesame package required for IDAT processing. ",
          "Install with: BiocManager::install('sesame')")
   }
 
-  # Find all IDAT files
-  idat_files <- list.files(idat_dir, pattern = "_Grn\\.idat$|_Red\\.idat$",
-                           recursive = TRUE, full.names = TRUE, ignore.case = TRUE)
-
-  if (length(idat_files) == 0) {
-    stop("No IDAT files found in: ", idat_dir)
-  }
-
-  # Get unique sample prefixes
-  sample_prefixes <- unique(gsub("_(Grn|Red)\\.idat$", "", idat_files, ignore.case = TRUE))
-  log_msg("Found %d samples", length(sample_prefixes), verbose = verbose)
-
-  # Process with SeSAMe openSesame
-  log_msg("Processing with SeSAMe (NOOB normalization, dye-bias correction, pOOBAH)...",
-          verbose = verbose)
-
-  betas <- sesame::openSesame(
-    idat_dir,
-    prep = "QCDPB",
-    func = sesame::getBetas
-  )
-
-  # openSesame returns a named vector for 1 sample, matrix for multiple
-  # Convert to matrix if needed (probes as rows, samples as columns)
-  if (is.numeric(betas) && !is.matrix(betas)) {
-    probe_names <- names(betas)
-    sample_name <- if (length(sample_prefixes) == 1) {
-      basename(sample_prefixes[1])
+  if (length(input) == 1L && dir.exists(input)) {
+    if (verbose) message("  Processing IDAT directory: ", input)
+    sdfs <- sesame::openSesame(input, prep = "QCDPB", func = NULL, BPPARAM = NULL)
+  } else {
+    if (verbose) message("  Processing ", length(input), " IDAT file(s)...")
+    paths <- input
+    if (length(paths) == 1L) {
+      base <- sub("_(Grn|Red)\\.idat(\\.gz)?$", "", paths, ignore.case = TRUE)
+      sample_name <- basename(base)
+      sdfs <- sesame::openSesame(base, prep = "QCDPB", func = NULL)
+      if (is.list(sdfs)) names(sdfs) <- sample_name
     } else {
-      "Sample1"
+      sdfs <- sesame::openSesame(paths, prep = "QCDPB", func = NULL)
     }
-    betas <- matrix(betas, ncol = 1, dimnames = list(probe_names, sample_name))
   }
 
-  # If openSesame returned samples as rows (samples < probes), transpose
-  if (!is.null(betas) && is.matrix(betas) && nrow(betas) < ncol(betas)) {
-    betas <- t(betas)
+  # Wrap single-SigDF returns in a list for uniform handling
+  if (!is.list(sdfs) || (!is.null(sdfs$Probe_ID) && !is.list(sdfs[[1]]))) {
+    sdfs <- list(sdfs)
+    names(sdfs) <- "Sample_1"
+  }
+  if (is.null(names(sdfs))) {
+    names(sdfs) <- paste0("Sample_", seq_along(sdfs))
   }
 
-  return(betas)
+  # ---- Compute sex intensities from SigDFs (methylQC preferred input) ----
+  sex_intensities <- tryCatch(
+    compute_sex_signals_from_sdfs(sdfs),
+    error = function(e) {
+      if (verbose) message("    Sex intensity calc failed: ", e$message)
+      NULL
+    })
+  if (!is.null(sex_intensities)) {
+    cache_sex_signals(sex_intensities, scale = "intensity")
+    if (verbose) {
+      n_ok <- sum(!is.na(sex_intensities$chrX) & !is.na(sex_intensities$chrY))
+      log_msg("  Cached methylQC-style intensity signals (%d/%d samples)",
+              n_ok, nrow(sex_intensities), verbose = verbose)
+    }
+  }
+
+  # ---- Extract betas ----
+  betas <- do.call(cbind, lapply(sdfs, sesame::getBetas))
+
+  if (is.null(colnames(betas)) || any(colnames(betas) == "")) {
+    colnames(betas) <- names(sdfs)
+  }
+
+  # SigDFs no longer needed -- free memory
+  rm(sdfs)
+  invisible(gc(verbose = FALSE))
+
+  betas
 }
 
 
-#' Load reference betas for imputation
-#'
-#' Searches multiple locations for the reference betas file used during
-#' imputation. Falls back gracefully to row-median imputation if not found.
-#'
-#' @param verbose Print progress
-#' @return Named numeric vector of reference beta values, or NULL if not found
+#' Load beta values from various input formats
 #' @keywords internal
-load_reference_betas <- function(verbose = TRUE) {
+load_input_data <- function(input, n_cores, verbose) {
 
-  # Helper to safely check if a file exists
-  safe_file_exists <- function(p) {
-    tryCatch({
-      if (is.null(p) || !is.character(p) || length(p) != 1) return(FALSE)
-      if (is.na(p) || nchar(p) == 0) return(FALSE)
-      file.exists(p)
-    }, error = function(e) FALSE)
-  }
+  # Reset cached sex signals from any previous run
+  .qc_env$sex_signals <- NULL
 
-  # Build list of candidate paths
-  ref_paths <- character(0)
-
-  # 1. Installed package location
-  tryCatch({
-    p <- system.file("extdata", "reference_betas.rds", package = "quickclocks")
-    if (nchar(p) > 0) ref_paths <- c(ref_paths, p)
-  }, error = function(e) NULL)
-
-  # 2. Development: relative to current working directory
-  ref_paths <- c(ref_paths, file.path(getwd(), "inst", "extdata", "reference_betas.rds"))
-
-  # 3. Try relative to source file location (only works when sourced)
-  tryCatch({
-    src_file <- sys.frame(1)$ofile
-    if (!is.null(src_file) && is.character(src_file) && nchar(src_file) > 0) {
-      ref_paths <- c(ref_paths,
-        file.path(dirname(src_file), "..", "inst", "extdata", "reference_betas.rds"),
-        file.path(dirname(src_file), "..", "..", "inst", "extdata", "reference_betas.rds")
-      )
-    }
-  }, error = function(e) NULL)
-
-  # 4. Try to find via installed package path
-  tryCatch({
-    pkg_path <- find.package("quickclocks", quiet = TRUE)
-    if (length(pkg_path) > 0 && nchar(pkg_path[1]) > 0) {
-      ref_paths <- c(ref_paths, file.path(pkg_path[1], "extdata", "reference_betas.rds"))
-    }
-  }, error = function(e) NULL)
-
-  # 5. Also check for the original filename
-  ref_paths <- c(ref_paths,
-    file.path(getwd(), "inst", "extdata", "final_cg_means_01032026.rds"),
-    file.path(getwd(), "final_cg_means_01032026.rds")
-  )
-
-  # Check each path safely
-  for (path in ref_paths) {
-    if (safe_file_exists(path)) {
-      tryCatch({
-        ref <- readRDS(path)
-        log_msg("Loaded %d reference probe values", length(ref), verbose = verbose)
-        return(ref)
-      }, error = function(e) NULL)
-    }
-  }
-
-  log_msg("Reference betas file not found. Imputation will use row medians only.",
-          verbose = verbose)
-  return(NULL)
-}
-
-
-#' Perform smart imputation of missing beta values
-#'
-#' Uses reference betas when available, falls back to row medians,
-#' then to 0.5 for any remaining NAs. Fully vectorized for speed.
-#'
-#' @param betas Beta matrix (probes as rows, samples as columns)
-#' @param reference_betas Named vector of reference beta values (or NULL)
-#' @param verbose Print progress
-#' @return Imputed beta matrix
-#' @keywords internal
-perform_smart_imputation <- function(betas, reference_betas, verbose = TRUE) {
-
-  n_missing_before <- sum(is.na(betas))
-
-  if (n_missing_before == 0) {
-    log_msg("No missing values to impute", verbose = verbose)
-    return(betas)
-  }
-
-  log_msg("Missing values: %d (%.2f%%)",
-          n_missing_before,
-          100 * n_missing_before / length(betas),
-          verbose = verbose)
-
-  # Identify rows (probes) with any NA — vectorized, avoids slow apply()
-  na_mask <- is.na(betas)
-  na_row_idx <- which(rowSums(na_mask) > 0)
-  na_probe_names <- rownames(betas)[na_row_idx]
-
-  if (!is.null(reference_betas)) {
-    # Single vectorized lookup: which NA probes have reference values
-    ref_names <- names(reference_betas)
-    has_ref <- na_probe_names %in% ref_names
-
-    if (ncol(betas) == 1) {
-      # === Single sample: fully vectorized, no loops ===
-      ref_probes <- na_probe_names[has_ref]
-      if (length(ref_probes) > 0) {
-        betas[ref_probes, 1] <- reference_betas[ref_probes]
-      }
-      # Remaining NAs get 0.5 (no row median possible with 1 sample)
-      still_na <- is.na(betas[, 1])
-      if (any(still_na)) {
-        betas[still_na, 1] <- 0.5
+  if (is.matrix(input) || is.data.frame(input)) {
+    betas <- as.matrix(input)
+  } else if (is.character(input) && length(input) >= 1L) {
+    is_idat <- grepl("\\.idat(\\.gz)?$", input, ignore.case = TRUE) |
+               (length(input) == 1L && dir.exists(input))
+    if (any(is_idat)) {
+      betas <- process_idat_files(input, n_cores, verbose)
+    } else if (length(input) == 1L) {
+      f <- input
+      if (grepl("\\.qs2?$", f) && requireNamespace("qs2", quietly = TRUE)) {
+        betas <- qs2::qs_read(f)
+      } else if (grepl("\\.rds$", f, ignore.case = TRUE)) {
+        betas <- readRDS(f)
+      } else if (grepl("\\.csv$", f, ignore.case = TRUE)) {
+        betas <- as.matrix(utils::read.csv(f, row.names = 1, check.names = FALSE))
+      } else if (grepl("\\.t(ab|sv)$", f, ignore.case = TRUE)) {
+        betas <- as.matrix(utils::read.table(f, header = TRUE, sep = "\t",
+                                                row.names = 1, check.names = FALSE))
+      } else {
+        stop("Unsupported file format: ", f)
       }
     } else {
-      # === Multi-sample: vectorize reference, loop only for row medians ===
-      ref_probes <- na_probe_names[has_ref]
-      for (probe in ref_probes) {
-        na_cols <- na_mask[probe, ]
-        betas[probe, na_cols] <- reference_betas[probe]
-      }
-      noref_probes <- na_probe_names[!has_ref]
-      for (probe in noref_probes) {
-        na_cols <- na_mask[probe, ]
-        row_med <- median(betas[probe, !na_cols], na.rm = TRUE)
-        betas[probe, na_cols] <- if (!is.na(row_med)) row_med else 0.5
-      }
+      stop("Multiple file paths only supported for .idat input")
     }
   } else {
-    # No reference available
-    if (ncol(betas) == 1) {
-      betas[na_mask] <- 0.5
-    } else {
-      for (i in na_row_idx) {
-        na_cols <- na_mask[i, ]
-        row_med <- median(betas[i, !na_cols], na.rm = TRUE)
-        betas[i, na_cols] <- if (!is.na(row_med)) row_med else 0.5
-      }
-    }
+    stop("Unsupported input type: ", class(input)[1])
   }
 
-  n_missing_after <- sum(is.na(betas))
-  log_msg("Imputed %d values", n_missing_before - n_missing_after, verbose = verbose)
+  if (!is.matrix(betas)) betas <- as.matrix(betas)
+  betas
+}
 
-  return(betas)
+
+#' Apply kNN imputation (and stash diagnostic frame for the orchestrator)
+#' @keywords internal
+perform_knn_imputation <- function(betas,
+                                     reference_path,
+                                     k,
+                                     zero_shot_threshold,
+                                     verbose) {
+
+  imp <- knn_impute(
+    betas,
+    reference_path      = reference_path,
+    k                   = k,
+    zero_shot_threshold = zero_shot_threshold,
+    verbose             = verbose
+  )
+  .qc_env$imputation_info <- imp$sample_info
+  imp$betas
 }

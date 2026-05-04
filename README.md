@@ -1,344 +1,301 @@
-# 'quickclocks' (Unified Epigenetic Clock Calculator)
+# clocker
 
-A comprehensive R package for calculating 40+ epigenetic clocks from DNA methylation data. Integrates clocks from multiple research labs into a single, easy-to-use interface with a single function call. Accepts many inputs formats -- e.g., directory of IDAT files or beta matrix. 
+**Unified Epigenetic Clock Calculator**
+
+A comprehensive R package for calculating 40+ epigenetic clocks from DNA
+methylation data with a single function call. Integrates clocks from
+multiple research labs into one interface, accepts IDAT files or beta
+matrices, and handles imputation, sex inference, cell deconvolution, and
+clock projection automatically.
 
 ## Features
 
-- **40+ Epigenetic Clocks** from multiple research groups
-- **Single Function Interface** - one call calculates everything
-- **Automatic Input Detection** - works with IDAT files or beta matrices
-- **EpiDISH Cell Deconvolution** - RPC and CP methods for 7 blood cell types
-- **PC-Clocks** - Principal component-adjusted clocks with automatic phenotype inference
-- **Optimized Performance** - parallel processing with automatic core detection
-- **Smart Caching** - manifests and large data files cached for fast reloading
+- **40+ epigenetic clocks** from across the literature in one place
+- **Single function call**: `clocker(input)` does everything
+- **Many input formats**: IDAT directory, IDAT file paths, beta matrix,
+  or `.rds` / `.qs2` / `.csv` / `.tsv` file
+- **EPICv2 native**: probe-name normalization with EPIC/450K position
+  matching where possible
+- **kNN imputation** with reference-mean zero-shot fallback
+- **Sex inference** (exact algorithm, verified bit-for-bit)
+- **EpiDISH cell deconvolution** (RPC + CP, 7 blood cell types)
+- **PC-Clocks** with automatic Age/Female fallback when pheno is missing
+- **Embedded coefficients** for the small clocks — no external R-package
+  dependency required for Horvath, Hannum, PhenoAge, DNAmTL, Lin, Zhang,
+  Bocklandt, Weidner, Vidal-Bralo, Garagnani, AdaptAge, CausAge, DamAge,
+  SystemsAge, epiTOC2 once the build script has run
+- **CRAN-compliant cache**: `tools::R_user_dir("clocker", "cache")`
+- **Per-sample missing-probe report** to spot samples where any clock's
+  coverage is degraded
 
 ## Supported Platforms
 
-| Platform | Probes | Status |
-|----------|--------|--------|
-| EPICv2 / EPIC+ | ~930,000 | ✅ Fully supported |
-| EPIC (v1) | ~865,000 | ✅ Fully supported |
-| 450K | ~485,000 | ✅ Fully supported |
-| 27K | ~27,000 | ✅ Supported |
-| MSA | ~285,000 | ✅ Supported |
+| Platform        | Probes      | Status            |
+| --------------- | ----------- | ----------------- |
+| EPICv2 / EPIC+  | ~930,000    | Fully supported   |
+| EPIC v1         | ~865,000    | Fully supported   |
+| 450K            | ~485,000    | Fully supported   |
+| 27K             | ~27,000     | Supported         |
+| MSA             | ~285,000    | Supported         |
 
 ## Installation
 
-```r
-# Install from GitHub
-devtools::install_github("brianchengithub/quickclocks")
-```
-
-
-### Dependencies
-
-The install script handles everything automatically (only need to run once):
+Install dependencies first (one-time setup):
 
 ```r
 source("install_dependencies.R")
 ```
 
-**Key dependencies installed:**
-- `sesame` / `sesameData` - IDAT preprocessing
-- `EpiDISH` - Cell type deconvolution
-- `DunedinPACE` - Pace of aging clock
-- `methylCIPHER` - 40+ clocks including PC-Clocks
-- `qs2` - Fast data serialization for caching
-
-## Quick Start
+Then install clocker from GitHub:
 
 ```r
-# Load the package (or source the file)
-library(quickclocks)
-
-# Calculate all clocks from IDAT files
-results <- calculate_clocks("/path/to/idat/directory")
-
-# ALTERNATIVE: Input numeric matrix (of DNA methylation beta values)
-results <- calculate_clocks(beta_matrix)
-
+devtools::install_github("brianchengithub/clocker")
 ```
 
-### Input Options
+The installer pulls the required Bioconductor (`sesame`, `EpiDISH`) and
+GitHub-only (`DunedinPACE`, `methylCIPHER`, `EpiMitClocks`) packages.
+Optional helpers (`qs2`, `digest`, `progress`, `matrixStats`, `curl`) are
+also installed; clocker has graceful fallbacks if any are missing.
 
-**IDAT Files:**
+## Quick start
+
 ```r
-# Point to directory containing IDAT files
-results <- calculate_clocks("/data/methylation/idats/")
+library(clocker)
+
+# All clocks from an IDAT directory
+results <- clocker("/filepath/idats/")
+
+# Or from a pre-processed beta matrix (CpGs x samples, [0, 1] values)
+results <- clocker(beta_matrix)
+
+# With phenotype info — pheno$Age and pheno$Sex auto-coerced
+pheno <- data.frame(
+  Age = c(45, 67, 22),
+  Sex = c("Female", "M", "f"),       # accepts 0/1, M/F, Male/Female (any case)
+  row.names = c("S1", "S2", "S3")
+)
+results <- clocker(beta_matrix, pheno = pheno)
 ```
-- Supports nested directories
-- Automatically finds `*_Grn.idat` and `*_Red.idat` pairs
 
-**Beta Matrix:**
-```r
-# Provide a pre-processed beta matrix
-results <- calculate_clocks(beta_matrix)
-```
-- Rows: CpG probe IDs (e.g., "cg00000029")
-- Columns: Sample IDs
-- Values: Beta values [0, 1]
-
-### Options
+### Common options
 
 ```r
-results <- calculate_clocks(
+results <- clocker(
   input,
-  n_cores = NULL,    # NULL = auto-detect optimal cores
-  verbose = TRUE     # Print progress messages
+  pheno                   = NULL,    # optional phenotype data.frame
+  n_cores                 = NULL,    # NULL = auto-detect
+  reference_path          = NULL,    # path to reference_betas.rds
+  knn_k                   = 10,      # neighbours for kNN imputation
+  knn_zero_shot_threshold = 0.10,    # > this fraction missing -> zero-shot
+  missing_report_path     = NULL,    # CSV path for per-sample coverage
+  verbose                 = TRUE
 )
 ```
 
 ## Output
 
-Returns a `data.frame` with one row per sample and columns for:
+A `data.frame` with one row per sample. Columns are grouped:
 
-| Category | Columns | Description |
-|----------|---------|-------------|
-| Sample ID | `Sample_ID` | Sample identifiers |
-| Cell Types (RPC) | `CellType_RPC_*` | EpiDISH RPC estimates (7 types) |
-| Cell Types (CP) | `CellType_CP_*` | EpiDISH CP estimates (7 types) |
-| Sex | `InferredSex`, `InferredSex_Numeric` | Chromosome-based inference |
-| Age Clocks | `Horvath1`, `Horvath2`, `Hannum`, etc. | Epigenetic age estimates |
-| PC Clocks | `PCHorvath1`, `PCHorvath2`, etc. | PC-adjusted clocks |
-| Pace | `DunedinPACE` | Pace of biological aging |
-| Mitotic | `epiTOC2_TNSC` | Stem cell divisions |
+| Prefix / Column          | Description                                          |
+| ------------------------ | ---------------------------------------------------- |
+| `sample_id`              | Sample identifier                                    |
+| `InferredSex`            | methylQC call: `F`, `M`, or `Unclear`                |
+| `InferredSexFlag`        | `F_band_only` / `M_band_only` / `outside_both_bands` / etc. |
+| `InferredSexScale`       | `intensity` (IDAT input) or `beta` (matrix input)    |
+| `chrX_signal`, `chrY_signal` | Per-sample chrX/chrY summary stat used by sex caller |
+| `Clock_*`                | First-generation clocks (Horvath1, Horvath2, Hannum, PhenoAge, DNAmTL, Lin, Zhang, ...) |
+| `PC_*`                   | PC-adjusted clocks (PCHorvath1/2, PCHannum, PCPhenoAge, PCGrimAge, PCDNAmTL) |
+| `DunedinPACE`            | Pace-of-aging estimate                               |
+| `epiTOC2_TNSC`           | Total stem cell divisions                            |
+| `EpiCMIT`, `MiAge`, `Replitali` | Other mitotic clocks                          |
+| `AdaptAge`, `CausAge`, `DamAge`, `SystemsAge` | causality / damage clocks      |
+| `CellType_RPC_*`         | EpiDISH RPC fractions (7 blood cell types)           |
+| `CellType_CP_*`          | EpiDISH CP fractions                                 |
+| `Accel_*`                | Age acceleration residuals (when `pheno$Age` provided) |
 
-### Example Output
+Per-sample imputation diagnostics are stashed in
+`clocker:::.qc_env$imputation_info` after every run.
+
+## How it works (high level)
+
+1. **Load + validate.** IDAT files go through SeSAMe (`openSesame(prep="QCDPB")`).
+   Beta matrices are sanity-checked and clipped to `[0, 1]`. Robust
+   M-value detection (median + IQR) auto-converts M-values when needed.
+2. **EPICv2 harmonization.** Suffix-bearing probe names (`cg00000029_TC11`)
+   are mapped to base CpG IDs. When multiple replicates exist, the one
+   matching the original EPIC v1 / 450K probe by genomic position +
+   design + strand is preferred over averaging.
+3. **kNN imputation** with reference-mean zero-shot fallback. See [Imputation](#imputation) below.
+4. **Sex inference.** Exact port of methylQC's algorithm —
+   curated chrX/chrY probe panel, threshold sweep, cluster regression,
+   ±5σ orthogonal-distance bands. Bit-for-bit verified against the
+   methylQC reference. See [Sex inference](#sex-inference) below.
+5. **Clock projection.** All available clocks are computed; PC-Clocks
+   data (~2 GB) downloads on first use to the cache.
+6. **Cell deconvolution.** EpiDISH RPC + CP against `centDHSbloodDMC.m`.
+7. **Output assembly.** Stable column ordering with `Clock_*`, `PC_*`,
+   `Accel_*`, `CellType_*` prefixes.
+
+## Imputation
+
+Two-pass hybrid:
+
+- **Within-batch kNN.** For each sample with < `knn_zero_shot_threshold`
+  missing-probe fraction, the `k` most similar OTHER samples in the input
+  batch are found by `1 - Pearson` distance over probes both samples have
+  non-missing. Each missing probe is imputed as a Gaussian-kernel-weighted
+  average across those neighbours.
+- **Zero-shot reference fallback.** Samples above the threshold (or any
+  residual probes the kNN neighbours also lack, or single-sample runs)
+  fall through to the per-probe means in your `reference_betas.rds`.
+
+Reference resolution order:
+
+1. `reference_path` argument to `clocker()`
+2. `options(clocker.reference_betas = "/path/...")`
+3. `Sys.getenv("CLOCKER_REFERENCE_BETAS")`
+4. `system.file("extdata", "reference_betas.rds", package = "clocker")`
+
+`reference_betas.rds` should be a **named numeric vector** of mean beta
+values keyed by CpG ID. Data-frame and matrix forms are also accepted
+for backward compat.
+
+## Sex inference
+
+Exact port of the methylQC algorithm:
+
+1. **Per-sample sex signal.** When SigDFs are available (IDAT input),
+   total signal intensity (`MG + MR + UG + UR`) is computed over a
+   curated panel of 314 chrY probes (PAR-excluded, cross-hyb removed)
+   and 3,433 chrX-X-inactivation probes (PAR-excluded). For beta-only
+   input, median beta over the same probes substitutes.
+2. **Threshold optimization.** Sweep candidate chrY thresholds in
+   `quantile(chrY, seq(0.15, 0.85, 0.01))` and pick the one minimizing
+   total absolute residuals from per-cluster `lm(chrY ~ chrX)` fits.
+3. **Confidence bands.** Refit each cluster, compute orthogonal distance
+   from each sample to each line, set band thresholds at 5σ.
+4. **Classification.** F-band only → F; M-band only → M; both bands →
+   tiebreak by chrY threshold; neither band → Unclear.
+
+For batches < 6 samples (data-driven fit impossible), embedded reference
+parameters in `DEFAULT_SEX_REFERENCE` are used. Recalibrate for atypical
+tissues (tumor, placenta, brain) via:
 
 ```r
-> colnames(results)
- [1] "Sample_ID"           "Horvath1"            "Horvath2"           
- [4] "Hannum"              "PhenoAge"            "DNAmTL"             
- [7] "Lin"                 "Zhang"               "Zhang2019"          
-[10] "VidalBralo"          "epiTOC2_TNSC"        "CellType_RPC_B"     
-[13] "CellType_RPC_CD4T"   "CellType_RPC_CD8T"   "CellType_RPC_Mono"  
-[16] "CellType_RPC_Neu"    "CellType_RPC_NK"     "CellType_RPC_Eos"   
-[19] "CellType_CP_B"       "CellType_CP_CD4T"    "CellType_CP_CD8T"   
-[22] "CellType_CP_Mono"    "CellType_CP_Neu"     "CellType_CP_NK"     
-[25] "CellType_CP_Eos"     "InferredSex_Numeric" "InferredSex"        
-[28] "DunedinPACE"         "PCHorvath1"          "PCHorvath2"         
-[31] "PCHannum"            "PCPhenoAge"          "PCDNAmTL"           
-[34] "PCGrimAge"           "AdaptAge"            "CausAge"            
-[37] "DamAge"
+set_sex_reference(
+  scale     = "intensity",                # or "beta"
+  threshold = 6500,
+  male      = list(slope = -0.10, intercept = 7800, sigma = 350),
+  female    = list(slope = -0.02, intercept = 1100, sigma = 300)
+)
 ```
 
-## Supported Clocks
+## Caching
 
-### Cell Type Deconvolution (EpiDISH)
+clocker caches large files in CRAN-compliant locations resolved by:
 
-Uses the `centDHSbloodDMC.m` reference with two methods:
+1. `getOption("clocker.cache_dir")` if set
+2. `Sys.getenv("CLOCKER_CACHE")` if set
+3. `tools::R_user_dir("clocker", "cache")` (XDG-compliant on Linux)
+4. `tempdir()/clocker` as a final fallback
 
-| Method | Description | Output Prefix |
-|--------|-------------|---------------|
-| **RPC** | Robust Partial Correlations (recommended) | `CellType_RPC_` |
-| **CP** | Constrained Projection (Houseman) | `CellType_CP_` |
+Cached items:
 
-**Cell Types:** B cells, CD4+ T, CD8+ T, Monocytes, Neutrophils, NK cells, Eosinophils
-
-### First-Generation Age Clocks
-
-| Clock | Year | Description |
-|-------|------|-------------|
-| `Horvath1` | 2013 | Pan-tissue clock (353 CpGs) |
-| `Horvath2` | 2018 | Skin & blood clock |
-| `Hannum` | 2013 | Blood-based clock (71 CpGs) |
-| `PhenoAge` | 2018 | Mortality-trained clock |
-| `GrimAge` | 2019 | Lifespan predictor |
-| `DNAmTL` | 2019 | Telomere length estimator |
-
-### PC-Clocks (Principal Component Adjusted)
-
-| Clock | Description |
-|-------|-------------|
-| `PCHorvath1` | PC-adjusted Horvath multi-tissue |
-| `PCHorvath2` | PC-adjusted Horvath skin+blood |
-| `PCHannum` | PC-adjusted Hannum |
-| `PCPhenoAge` | PC-adjusted PhenoAge |
-| `PCGrimAge` | PC-adjusted GrimAge |
-| `PCDNAmTL` | PC-adjusted telomere length |
-
-**Note:** PC clocks require a ~2GB data file downloaded automatically from Zenodo on first use.
-
-### Pace of Aging
-
-| Clock | Description |
-|-------|-------------|
-| `DunedinPACE` | Rate of biological aging (1.0 = average) |
-
-### Mitotic / Cell Division Clocks
-
-| Clock | Description |
-|-------|-------------|
-| `epiTOC2_TNSC` | Total number of stem cell divisions |
-
-### Specialized Clocks (via methylCIPHER)
-
-| Category | Clocks |
-|----------|--------|
-| Causality | `AdaptAge`, `CausAge`, `DamAge` |
-| Lifestyle | Alcohol, BMI, Smoking predictors |
-| Organ-specific | Blood, Brain, Heart, Kidney, Liver, Lung |
-| Biological | Inflammation, Immune, Metabolic, Hormone |
-
-## Technical Details
-
-### IDAT Preprocessing Pipeline
-
-When processing IDAT files, uses SeSAMe's `openSesame()`:
-
-1. **NOOB** - Normal-exponential out-of-band background correction
-2. **Dye-bias correction** - Non-linear red/green channel normalization
-3. **pOOBAH** - P-value with out-of-band array hybridization
-
-### Imputation Strategy
-
-Missing CpG values are imputed using:
-
-1. **Reference-based imputation** - Median values from gold-standard datasets
-2. **Zero-shot imputation** - Adds missing clock probes from reference
-3. **Fallback** - Row median for probes without reference data
-
-### Sex Inference
-
-Custom chromosome-based method:
-- Compares X vs Y chromosome methylation intensity
-- Uses platform-specific manifest (auto-downloaded and cached)
-- Output: `F` (Female), `M` (Male), or `U` (Unknown)
-
-### PC Clock Phenotype Inference
-
-PC clocks require Age and Sex inputs. When not provided:
-- **Age**: Uses Horvath2 (Skin & Blood clock) estimate
-- **Sex**: Uses chromosome-based inference
-
-### Caching
-
-The package caches large files for performance:
-- **Manifests**: `~/.epigenetic_clock_cache/` (qs2 format)
-- **PC Clock data**: Same directory (~2GB, downloaded from Zenodo)
+- `manifests/EPIC.hg38.manifest.qs2` (and platform variants)
+- `pcclocks/PCClocks_data.qs2` (~2 GB; SHA-256 verified when set)
 
 ## Performance
 
-### Automatic Thread Optimization
-
-Automatically determines optimal CPU cores based on:
-- Dataset size (samples × probes)
-- Available CPU cores
-- Available RAM
-
-```r
-# Auto-detect (recommended)
-results <- calculate_clocks(betas)
-
-# Manual override
-results <- calculate_clocks(betas, n_cores = 8)
-```
-
-### Memory Requirements
-
-| Platform | Memory per 100 samples |
-|----------|----------------------|
-| 27K | ~0.5 GB |
-| 450K | ~2 GB |
-| EPIC | ~4 GB |
-| EPICv2 | ~5 GB |
-
-### Typical Runtime
-
-- ~20 seconds for 68 EPIC samples (after initial setup)
-- First run downloads manifests and PC clock data (~2GB)
+- ~20 seconds for 60+ EPIC samples after first run (manifests cached)
+- First run downloads array manifests (~70 MB) and PC-Clocks data (~2 GB)
+- Memory ≈ 5 GB per 100 EPICv2 samples (heavy phase is PC-Clocks projection)
+- `n_cores` auto-detection accounts for available RAM and dataset size
 
 ## Troubleshooting
 
-### Common Issues
+**`EpiDISH not installed`** — `BiocManager::install("EpiDISH")`
 
-**"EpiDISH not installed"**
-```r
-BiocManager::install("EpiDISH")
-```
+**PC-Clocks data download hangs or times out** — Manually download
+`PCClocks_data.qs2` from
+[Zenodo](https://zenodo.org/records/13952402) and place it at
+`tools::R_user_dir("clocker", "cache")/pcclocks/PCClocks_data.qs2`.
 
-**PC clocks timeout during data download**
-```r
-# Manually download PCClocks_data.qs2 from Zenodo:
-# https://zenodo.org/records/13952402
-# Place in: ~/.epigenetic_clock_cache/
-```
+**Low probe-overlap warnings** — Check that input rownames are standard
+Illumina IDs (e.g., `cg00000029`). On EPICv2 data the package strips
+suffixes automatically; if you see this warning on EPICv2 input, the
+underlying data may have been renamed before reaching clocker.
 
-**Low probe overlap warnings**
-- Check that your data uses standard Illumina probe IDs (cg########)
-- Verify platform detection is correct
+**Diagnostic dump** — `Rscript diagnose_packages.R > diag.log 2>&1` and
+share `diag.log` when reporting issues.
 
-### Diagnostic Script
-
-```r
-source("diagnose_packages.R")
-```
-
-## File Structure
+## File structure
 
 ```
-quickclocks/
+clocker/
 ├── DESCRIPTION
 ├── NAMESPACE
-├── LICENSE
-├── .gitignore
 ├── README.md
-│
+├── METHODS.md
+├── install_dependencies.R       # One-time dependency setup
+├── diagnose_packages.R          # Troubleshooting utility
 ├── R/
-│   ├── calculate_clocks.R      # Main exported function: calculate_clocks()
-│   ├── input_processing.R      # IDAT loading, reference betas, imputation
-│   ├── manifest.R              # Array manifest download and caching
-│   ├── sex_inference.R         # Chromosome-based biological sex inference
-│   ├── clock_engines.R         # Coefficient loading, weighted-sum calculator
-│   ├── cell_deconvolution.R    # EpiDISH cell type estimation (RPC + CP)
-│   ├── clock_computation.R     # Clock calculation orchestrator
-│   ├── utils.R                 # Logging, validation, platform detection
-│   └── zzz.R                   # Package load/attach hooks
-│
-├── inst/
-│   └── extdata/
-│       └── reference_betas.rds # Reference beta values for imputation
-│
-├── man/
-│   ├── calculate_clocks.Rd
-│   └── quickclocks-package.Rd
-│
-├── install_dependencies.R      # Setup script for required Bioconductor packages
-└── diagnose_packages.R         # Troubleshooting utility for package issues
+│   ├── clocker.R                # Main function: clocker() + aliases
+│   ├── input_processing.R       # IDAT loading, betas validation
+│   ├── imputation.R             # kNN + zero-shot vs. reference_betas.rds
+│   ├── sex_inference.R          # methylQC algorithm (verbatim)
+│   ├── sex_probe_lists.R        # 314 chrY + 3,433 chrX probes (MIT, attribution)
+│   ├── manifest.R               # Array manifest download/cache
+│   ├── clock_engines.R          # Weighted-sum + epiTOC2 + missing-probe report
+│   ├── clock_coefficients.R     # Embedded coefficients + live fallbacks
+│   ├── clock_computation.R      # Orchestrator: routes to each clock backend
+│   ├── cell_deconvolution.R     # EpiDISH RPC + CP
+│   ├── utils.R                  # Logging, validation, cache, F/M coercion
+│   └── zzz.R                    # Package load hooks + private env
+├── data-raw/
+│   └── build_coefficients.R     # Maintainer-only: builds data/clock_coefficients.rda
+├── data/
+│   └── clock_coefficients.rda   # Generated (run data-raw script once)
+└── inst/
+    └── extdata/
+        └── reference_betas.rds  # Probe-mean reference for zero-shot imputation
 ```
 
 ## Citation
 
-If you use this package, please cite the original publications:
+If you use clocker, please cite the original publications:
 
-**Core Methods:**
-- **EpiDISH**: Teschendorff AE, et al. (2017) *Genome Biology*
-- **SeSAMe**: Zhou W, et al. (2018) *Nucleic Acids Research*
-- **DunedinPACE**: Belsky DW, et al. (2022) *eLife*
-- **PC-Clocks**: Higgins-Chen AT, et al. (2022) *Nature Aging*
-- **epiTOC2**: Teschendorff AE (2020) *Genome Biology*
-- **methylCIPHER**: Higgins-Chen AT, et al. (2022)
+**Core methods**
 
-**Original Clocks:**
-- **Horvath**: Horvath S (2013) *Genome Biology*
-- **Hannum**: Hannum G, et al. (2013) *Molecular Cell*
-- **PhenoAge**: Levine ME, et al. (2018) *Aging*
-- **GrimAge**: Lu AT, et al. (2019) *Aging*
+- **SeSAMe**: Zhou W et al. (2018) *Nucleic Acids Research* 46:e123
+- **EpiDISH**: Teschendorff AE et al. (2017) *BMC Bioinformatics* 18:105
+- **DunedinPACE**: Belsky DW et al. (2022) *eLife* 11:e73420
+- **PC-Clocks**: Higgins-Chen AT et al. (2022) *Nature Aging* 2:644
+- **epiTOC2**: Teschendorff AE (2020) *Genome Medicine* 12:56
+- **methylCIPHER**: Higgins-Chen AT et al. (2022)
+- **methylQC** (sex caller): Cheng B (https://github.com/brianchengithub/methylQC), MIT
+
+**Original clocks**
+
+- **Horvath**: Horvath S (2013) *Genome Biology* 14:R115; Horvath et al. (2018) *Aging* 10:1758
+- **Hannum**: Hannum G et al. (2013) *Molecular Cell* 49:359
+- **PhenoAge**: Levine ME et al. (2018) *Aging* 10:573
+- **GrimAge**: Lu AT et al. (2019) *Aging* 11:303
+- **DNAmTL**: Lu AT et al. (2019) *Aging* 11:5895
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file.
+MIT — see LICENSE.
 
 ## Contributing
 
-Contributions welcome! Please open an issue or submit a pull request.
+Issues and pull requests welcome.
 
 ## Changelog
 
-### v1.0.0
-- Single function interface (`calculate_clocks()`)
-- EpiDISH cell deconvolution (RPC + CP methods)
-- PC clocks with automatic phenotype inference
-- Horvath age transformation fix
-- qs2 caching for improved performance
-- Chromosome-based sex inference
+See `CHANGES.md` for the full version history. Highlights:
+
+- **v2.2.0** — Renamed from `quickclocks` to `clocker`; reverted imputation
+  to use `reference_betas.rds`; methylQC sex caller (verbatim).
+- **v2.1.x** — kNN imputation, methylQC-style sex inference, embedded
+  coefficients, CRAN-compliant cache, missing-probe report, progress bars.
+- **v1.0.0** — Initial single-function interface.

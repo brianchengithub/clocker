@@ -1,31 +1,38 @@
-Package: quickclocks
+Package: clocker
 Type: Package
 Title: Unified Epigenetic Clock Calculator
-Version: 2.0.0
-Date: 2025-01-09
-Authors@R: person("Brian", "Chen", role = c("aut", "cre"),
-                   email = "brian.chen4@ucsf.edu")
-Description: Calculate 40+ epigenetic clocks from DNA methylation data with a
-    single function call. Integrates SeSAMe (IDAT preprocessing), EpiDISH
-    (cell type deconvolution via RPC and CP methods), DunedinPACE, PC-Clocks,
-    epiTOC2, and methylCIPHER. Supports EPICv2, EPIC, 450K, 27K, and MSA arrays.
+Version: 2.2.0
+Authors@R: person("Kris", "[Last]", role = c("aut", "cre"),
+                  email = "you@example.com")
+Description: A unified interface for calculating 40+ epigenetic aging clocks
+    from DNA methylation data. Handles raw IDAT files (via SeSAMe) and
+    pre-processed beta matrices, including EPICv2 array support. Includes
+    kNN imputation, methylQC-style sex inference, EpiDISH cell composition,
+    and consolidated output for clocks across the literature (Horvath,
+    Hannum, PhenoAge, GrimAge, DunedinPACE, PC-Clocks, epiTOC2, methylCIPHER
+    family, and others).
 License: MIT + file LICENSE
-URL: https://github.com/brianchengithub/quickclocks
-BugReports: https://github.com/brianchengithub/quickclocks/issues
+URL: https://github.com/<your-username>/clocker
+BugReports: https://github.com/<your-username>/clocker/issues
 Encoding: UTF-8
 LazyData: true
-RoxygenNote: 7.3.1
-Depends: R (>= 4.0.0)
+Depends:
+    R (>= 4.0.0)
 Imports:
-    parallel,
     stats,
     utils,
-    methods
+    tools,
+    parallel
 Suggests:
     sesame,
     EpiDISH,
-    methylCIPHER,
     DunedinPACE,
+    methylCIPHER,
     EpiMitClocks,
+    matrixStats,
     qs2,
-    BiocManager
+    digest,
+    progress,
+    curl
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.0

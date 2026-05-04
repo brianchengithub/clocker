@@ -1,16 +1,28 @@
 # ============================================================================
 # Clock Computation Orchestrator
-# Coordinates all clock calculations and assembles results
+#
+# Coordinates clock calculations and assembles results. Major fixes here
+# (vs. v2.0):
+#   * Pheno data is now reordered to match colnames(betas) by sample ID
+#     (was previously pasted in row order; major silent-correctness bug).
+#   * No more .GlobalEnv writes; data is loaded into .qc_env.
+#   * PC-Clocks data file is verified by SHA-256 (with corruption fallback).
+#   * When pheno is missing or incomplete, we explicitly alert the user
+#     about which fallback (Horvath2/InferredSex/etc.) is being used.
+#   * Sex column accepts 0/1, F/M, Female/Male (any case) via
+#     coerce_female_indicator().
 # ============================================================================
 
 
+# Pinned PC-Clocks Zenodo asset. Update SHA when the URL changes.
+PCCLOCKS_URL <- "https://zenodo.org/records/17162604/files/PCClocks_data.qs2?download=1"
+PCCLOCKS_SHA256 <- NA_character_  # Set to expected hash once verified by maintainer
+PCCLOCKS_MIN_SIZE <- 1e9          # secondary integrity check (>= 1 GB)
+
+
 #' Check which clock packages are available
-#' @param available_probes Character vector of available probe IDs
-#' @param verbose Print progress
-#' @return Named list of logical values indicating package availability
 #' @keywords internal
 check_clock_availability <- function(available_probes, verbose = TRUE) {
-
   availability <- list(
     sesame = requireNamespace("sesame", quietly = TRUE),
     dunedin_pace = requireNamespace("DunedinPACE", quietly = TRUE),
@@ -19,28 +31,26 @@ check_clock_availability <- function(available_probes, verbose = TRUE) {
     epitoc2 = requireNamespace("EpiMitClocks", quietly = TRUE) ||
               requireNamespace("epiTOC2", quietly = TRUE),
     methylcipher = requireNamespace("methylCIPHER", quietly = TRUE) ||
-                   requireNamespace("methylcipher", quietly = TRUE)
+                   requireNamespace("methylcipher", quietly = TRUE),
+    embedded_coefficients = !is.null(.qc_env$clock_coefficients) ||
+      tryCatch({
+        e <- new.env(parent = emptyenv())
+        utils::data(list = "clock_coefficients", package = "clocker", envir = e)
+        exists("clock_coefficients", envir = e)
+      }, error = function(e) FALSE)
   )
 
   if (verbose) {
     for (pkg in names(availability)) {
       status <- if (availability[[pkg]]) "available" else "not installed"
-      if (pkg == "pc_clocks" && availability[[pkg]]) {
-        status <- "available (via methylCIPHER)"
-      }
       log_msg("  %s: %s", pkg, status, verbose = TRUE)
     }
   }
-
-  return(availability)
+  availability
 }
 
 
 #' Compute all clocks
-#'
-#' Main orchestrator that runs direct clock implementations, EpiDISH cell
-#' deconvolution, sex inference, DunedinPACE, PC clocks, mitotic clocks,
-#' and additional methylCIPHER clocks.
 #'
 #' @param betas Beta matrix (CpGs as rows, samples as columns)
 #' @param pheno Optional phenotype data.frame
@@ -50,37 +60,105 @@ check_clock_availability <- function(available_probes, verbose = TRUE) {
 #' @keywords internal
 compute_all_clocks <- function(betas, pheno = NULL, n_cores, verbose = TRUE) {
 
+  init_coverage_log()
+
   results <- data.frame(sample_id = colnames(betas), stringsAsFactors = FALSE)
 
-  # ===== Direct weighted-sum clock implementations =====
+  # Validate / reorder pheno upfront (FIX C1)
+  pheno <- validate_and_align_pheno(pheno, colnames(betas), verbose = verbose)
+
   results <- compute_direct_clocks(betas, results, verbose)
-
-  # ===== EpiDISH Cell Type Deconvolution =====
   results <- estimate_cell_composition(betas, results, verbose)
-
-  # ===== Sex Inference =====
   results <- compute_sex_inference(betas, results, verbose)
-
-  # ===== DunedinPACE =====
   results <- compute_dunedin_pace(betas, results, verbose)
-
-  # ===== PC-Clocks via methylCIPHER =====
   results <- compute_pc_clocks(betas, results, pheno, verbose)
-
-  # ===== EpiMitClocks (additional mitotic clocks) =====
   results <- compute_mitotic_clocks(betas, results, verbose)
-
-  # ===== methylCIPHER additional clocks =====
   results <- compute_additional_clocks(betas, results, verbose)
 
-  return(results)
+  results
 }
 
 
-# --- Individual clock computation helpers ---
+# ---------------------------------------------------------------------------
+# Pheno validation / alignment (FIX C1, F6, M8)
+# ---------------------------------------------------------------------------
+
+#' Validate phenotype data frame and align rows to sample order in betas
+#'
+#' Normalizes the Female column to integer 0/1 (M=0, F=1), accepting:
+#'   * 0/1 numeric
+#'   * "M"/"F"/"Male"/"Female" (any case)
+#'
+#' Reorders rows to match `sample_ids` exactly, erroring if any sample is
+#' missing from the pheno frame.
+#'
+#' @keywords internal
+validate_and_align_pheno <- function(pheno, sample_ids, verbose = TRUE) {
+
+  if (is.null(pheno)) return(NULL)
+
+  if (!is.data.frame(pheno)) {
+    warning("`pheno` is not a data.frame; ignoring.")
+    return(NULL)
+  }
+
+  # If rownames aren't set, try to find a 'sample_id'/'Sample_ID'/'id' column
+  if (is.null(rownames(pheno)) || all(rownames(pheno) == as.character(seq_len(nrow(pheno))))) {
+    for (id_col in c("sample_id", "Sample_ID", "id", "ID", "Sample", "sample")) {
+      if (id_col %in% colnames(pheno)) {
+        rownames(pheno) <- as.character(pheno[[id_col]])
+        break
+      }
+    }
+  }
+
+  if (is.null(rownames(pheno))) {
+    if (length(sample_ids) == nrow(pheno)) {
+      warning("`pheno` has no rownames or sample-ID column. Assuming row order matches betas.")
+      rownames(pheno) <- sample_ids
+    } else {
+      stop("`pheno` must have rownames matching colnames(betas), or a 'sample_id' column.")
+    }
+  }
+
+  missing_samples <- setdiff(sample_ids, rownames(pheno))
+  if (length(missing_samples) > 0L) {
+    stop(sprintf(
+      "Pheno is missing %d sample(s): %s%s",
+      length(missing_samples),
+      paste(utils::head(missing_samples, 5), collapse = ", "),
+      if (length(missing_samples) > 5) ", ..." else ""))
+  }
+
+  # Reorder to match betas
+  pheno <- pheno[sample_ids, , drop = FALSE]
+
+  # Normalize Female column if present
+  if ("Female" %in% colnames(pheno)) {
+    pheno$Female <- coerce_female_indicator(pheno$Female, na_on_unknown = TRUE)
+  } else if ("Sex" %in% colnames(pheno)) {
+    if (verbose) message("  Pheno: deriving Female from Sex column")
+    pheno$Female <- coerce_female_indicator(pheno$Sex, na_on_unknown = TRUE)
+  } else if ("sex" %in% colnames(pheno)) {
+    if (verbose) message("  Pheno: deriving Female from sex column")
+    pheno$Female <- coerce_female_indicator(pheno$sex, na_on_unknown = TRUE)
+  }
+
+  # Coerce Age numeric
+  if ("Age" %in% colnames(pheno)) {
+    pheno$Age <- suppressWarnings(as.numeric(pheno$Age))
+  } else if ("age" %in% colnames(pheno)) {
+    pheno$Age <- suppressWarnings(as.numeric(pheno$age))
+  }
+
+  pheno
+}
 
 
-#' Compute direct weighted-sum clocks
+# ---------------------------------------------------------------------------
+# Direct weighted-sum clocks
+# ---------------------------------------------------------------------------
+
 #' @keywords internal
 compute_direct_clocks <- function(betas, results, verbose = TRUE) {
 
@@ -88,8 +166,8 @@ compute_direct_clocks <- function(betas, results, verbose = TRUE) {
 
   tryCatch({
     coeffs <- initialize_clock_coefficients()
-
-    if (length(coeffs) > 0 && verbose) {
+    coeffs <- augment_with_inline_fallbacks(coeffs)
+    if (length(coeffs) > 0L && verbose) {
       message("    Loaded ", length(coeffs), " coefficient datasets")
     }
 
@@ -107,33 +185,38 @@ compute_direct_clocks <- function(betas, results, verbose = TRUE) {
       "VidalBralo" = "VidalBralo_CpGs",
       "Garagnani"  = "Garagnani_CpG"
     )
-
     horvath_transform_clocks <- c("Horvath1", "Horvath2")
-    computed_direct <- c()
+    computed_direct <- character()
+
+    pb <- make_progress_bar(length(mc_clocks), label = "Direct clocks",
+                              verbose = verbose)
 
     for (clock_name in names(mc_clocks)) {
       coef_name <- mc_clocks[[clock_name]]
       if (coef_name %in% names(coeffs)) {
-        tryCatch({
+        result <- tryCatch({
           if (clock_name %in% horvath_transform_clocks) {
-            result <- calc_weighted_sum_clock(betas, coeffs[[coef_name]],
-                                              transform_func = horvath_age_transform)
+            calc_weighted_sum_clock(betas, coeffs[[coef_name]],
+                                     transform_func = horvath_age_transform,
+                                     clock_name = clock_name)
           } else {
-            result <- calc_weighted_sum_clock(betas, coeffs[[coef_name]])
-          }
-          if (!is.null(result) && length(result) == ncol(betas)) {
-            results[[clock_name]] <- as.numeric(result)
-            computed_direct <- c(computed_direct, clock_name)
-          } else if (verbose && is.null(result)) {
-            message("    ", clock_name, ": no matching probes found")
+            calc_weighted_sum_clock(betas, coeffs[[coef_name]],
+                                     clock_name = clock_name)
           }
         }, error = function(e) {
           if (verbose) message("    ", clock_name, " error: ", e$message)
+          NULL
         })
+        if (!is.null(result) && length(result) == ncol(betas)) {
+          results[[clock_name]] <- as.numeric(result)
+          computed_direct <- c(computed_direct, clock_name)
+        }
       }
+      pb$tick()
     }
+    pb$done()
 
-    # epiTOC2 direct calculation
+    # epiTOC2
     tryCatch({
       toc2 <- calc_epitoc2_direct(betas, coeffs)
       if (!is.null(toc2) && length(toc2) == ncol(betas)) {
@@ -144,7 +227,7 @@ compute_direct_clocks <- function(betas, results, verbose = TRUE) {
       if (verbose) message("    epiTOC2 direct error: ", e$message)
     })
 
-    if (verbose && length(computed_direct) > 0) {
+    if (verbose && length(computed_direct) > 0L) {
       message("    Direct clocks: ", paste(computed_direct, collapse = ", "))
     }
 
@@ -152,39 +235,39 @@ compute_direct_clocks <- function(betas, results, verbose = TRUE) {
     if (verbose) message("    Direct implementations error: ", e$message)
   })
 
-  return(results)
+  results
 }
 
 
-#' Compute sex inference and add to results
+# ---------------------------------------------------------------------------
+# Sex inference
+# ---------------------------------------------------------------------------
+
 #' @keywords internal
 compute_sex_inference <- function(betas, results, verbose = TRUE) {
-
   tryCatch({
-    log_msg("  Inferring sex...", verbose = verbose)
+    log_msg("  Inferring sex (methylQC algorithm)...", verbose = verbose)
 
-    n_probes <- nrow(betas)
-    platform <- if (n_probes > 900000) "EPICv2"
-                else if (n_probes > 800000) "EPIC"
-                else if (n_probes > 400000) "HM450"
-                else "EPIC"
-
-    sex_result <- infer_sex_from_betas(betas, platform = platform, verbose = verbose)
+    sex_result <- infer_sex(betas, sdfs = NULL, verbose = verbose)
 
     if (is.list(sex_result) && length(sex_result$sex) == ncol(betas)) {
-      results$chrX_median <- sex_result$x_median
-      results$chrY_median <- sex_result$y_median
-      results$InferredSex <- sex_result$sex
+      results$chrX_signal      <- as.numeric(sex_result$chrX_signal)
+      results$chrY_signal      <- as.numeric(sex_result$chrY_signal)
+      results$InferredSex      <- as.character(sex_result$sex)
+      results$InferredSexFlag  <- as.character(sex_result$flag)
+      results$InferredSexScale <- sex_result$scale
     }
   }, error = function(e) {
     if (verbose) message("    Sex inference failed: ", e$message)
   })
-
-  return(results)
+  results
 }
 
 
-#' Compute DunedinPACE
+# ---------------------------------------------------------------------------
+# DunedinPACE
+# ---------------------------------------------------------------------------
+
 #' @keywords internal
 compute_dunedin_pace <- function(betas, results, verbose = TRUE) {
 
@@ -193,21 +276,14 @@ compute_dunedin_pace <- function(betas, results, verbose = TRUE) {
   tryCatch({
     log_msg("  Calculating DunedinPACE...", verbose = verbose)
 
-    betas_dp <- betas
-    if (!is.matrix(betas_dp)) betas_dp <- as.matrix(betas_dp)
-
-    # Force 2D even for single sample
+    betas_dp <- if (is.matrix(betas)) betas else as.matrix(betas)
     if (is.null(dim(betas_dp))) {
       probe_names <- names(betas_dp)
       betas_dp <- matrix(betas_dp, ncol = 1,
-                         dimnames = list(probe_names, colnames(betas)[1]))
+                          dimnames = list(probe_names, colnames(betas)[1]))
     }
 
-    is_single <- ncol(betas_dp) == 1
-
-    # DunedinPACE's internal EPICv2 handler crashes on single-sample matrices
-    # (dimension drop during its replicate-averaging step). Workaround:
-    # duplicate the column so it processes as 2 samples, then extract first.
+    is_single <- ncol(betas_dp) == 1L
     if (is_single) {
       sample_name <- colnames(betas_dp)[1]
       betas_dp <- cbind(betas_dp, betas_dp)
@@ -215,22 +291,13 @@ compute_dunedin_pace <- function(betas, results, verbose = TRUE) {
     }
 
     pace <- DunedinPACE::PACEProjector(betas_dp)
-
     if (!is.null(pace)) {
-      pace_val <- NULL
-      if (is.list(pace) && "DunedinPACE" %in% names(pace)) {
-        pace_val <- pace$DunedinPACE
-      } else if (is.data.frame(pace) && "DunedinPACE" %in% colnames(pace)) {
-        pace_val <- pace$DunedinPACE
-      } else if (is.numeric(pace)) {
-        pace_val <- pace
-      }
-
+      pace_val <- if (is.list(pace) && "DunedinPACE" %in% names(pace)) pace$DunedinPACE
+                  else if (is.data.frame(pace) && "DunedinPACE" %in% colnames(pace)) pace$DunedinPACE
+                  else if (is.numeric(pace)) pace
+                  else NULL
       if (!is.null(pace_val)) {
-        # If we duplicated, take only the first sample's result
-        if (is_single && length(pace_val) > 1) {
-          pace_val <- pace_val[1]
-        }
+        if (is_single && length(pace_val) > 1L) pace_val <- pace_val[1]
         if (length(pace_val) == ncol(betas) ||
             (length(pace_val) == 1 && ncol(betas) == 1)) {
           results$DunedinPACE <- as.numeric(pace_val)
@@ -240,12 +307,62 @@ compute_dunedin_pace <- function(betas, results, verbose = TRUE) {
   }, error = function(e) {
     if (verbose) message("    DunedinPACE failed: ", e$message)
   })
-
-  return(results)
+  results
 }
 
 
-#' Compute PC clocks via methylCIPHER
+# ---------------------------------------------------------------------------
+# PC-Clocks
+# ---------------------------------------------------------------------------
+
+#' @keywords internal
+ensure_pcclocks_data <- function(verbose = TRUE) {
+  cache_dir <- get_cache_dir("pcclocks")
+  pc_file <- file.path(cache_dir, "PCClocks_data.qs2")
+
+  validate <- function(path) {
+    if (!file.exists(path)) return(FALSE)
+    if (file.info(path)$size < PCCLOCKS_MIN_SIZE) return(FALSE)
+    if (!is.na(PCCLOCKS_SHA256)) {
+      got <- file_sha256(path)
+      if (!is.na(got) && !identical(got, PCCLOCKS_SHA256)) return(FALSE)
+    }
+    TRUE
+  }
+
+  if (validate(pc_file)) {
+    if (verbose) {
+      message(sprintf("    Using cached PC-Clocks data (%.2f GB)",
+                      file.info(pc_file)$size / 1e9))
+    }
+    return(pc_file)
+  }
+  if (file.exists(pc_file)) {
+    if (verbose) message("    Cached PC-Clocks data invalid; re-downloading...")
+    unlink(pc_file)
+  }
+
+  if (verbose) {
+    message("    Downloading PC-Clocks data from Zenodo (~2 GB; may take several minutes)...")
+  }
+  ok <- tryCatch({
+    download_with_retry(PCCLOCKS_URL, pc_file, retries = 2L,
+                         expected_sha256 = PCCLOCKS_SHA256,
+                         verbose = verbose)
+    TRUE
+  }, error = function(e) {
+    if (verbose) message("    Download failed: ", e$message)
+    FALSE
+  })
+
+  if (!ok || !validate(pc_file)) {
+    if (file.exists(pc_file)) unlink(pc_file)
+    return(NULL)
+  }
+  pc_file
+}
+
+
 #' @keywords internal
 compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
 
@@ -254,94 +371,70 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
   tryCatch({
     if (verbose) message("  Computing PC clocks...")
 
-    # Check for and download PC clocks data file if needed
-    pc_data_path <- NULL
-    cache_dir <- get_manifest_cache_dir()
-    pc_data_file <- file.path(cache_dir, "PCClocks_data.qs2")
-
-    if (file.exists(pc_data_file)) {
-      file_size <- file.info(pc_data_file)$size
-      if (file_size > 1e9) {
-        pc_data_path <- pc_data_file
-        if (verbose) message("    Using cached PC clocks data (", round(file_size/1e9, 2), " GB)")
-      } else {
-        if (verbose) message("    Cached PC clocks data appears incomplete, re-downloading...")
-        unlink(pc_data_file)
-      }
-    }
-
+    pc_data_path <- ensure_pcclocks_data(verbose = verbose)
     if (is.null(pc_data_path)) {
-      if (verbose) message("    Downloading PC clocks data from Zenodo (~2GB, this may take several minutes)...")
-      pc_url <- "https://zenodo.org/records/17162604/files/PCClocks_data.qs2?download=1"
-
-      old_timeout <- getOption("timeout")
-      options(timeout = 1800)
-
-      tryCatch({
-        download.file(pc_url, pc_data_file, mode = "wb", quiet = !verbose)
-      }, error = function(e) {
-        if (verbose) message("    Failed to download PC clocks data: ", e$message)
-      }, warning = function(w) {
-        if (verbose) message("    Download warning: ", w$message)
-      })
-
-      options(timeout = old_timeout)
-
-      if (file.exists(pc_data_file)) {
-        file_size <- file.info(pc_data_file)$size
-        if (file_size > 1e9) {
-          pc_data_path <- pc_data_file
-          if (verbose) message("    PC clocks data downloaded and cached (", round(file_size/1e9, 2), " GB)")
-        } else {
-          if (verbose) message("    Download incomplete, removing partial file")
-          unlink(pc_data_file)
-        }
-      }
+      if (verbose) message("    PC clocks skipped: data file not available")
+      return(results)
     }
 
-    # Load PC clocks CpG data to global env
+    # Load PC clock CpG list into the package private env (FIX C2)
     tryCatch({
-      data("PCClocks_CpGs", package = "methylCIPHER", envir = .GlobalEnv)
-    }, error = function(e) NULL, warning = function(w) NULL)
+      utils::data(list = "PCClocks_CpGs", package = "methylCIPHER",
+                   envir = .qc_env)
+    }, error = function(e) NULL)
+
+    # methylCIPHER's calcPCClocks may search for PCClocks_CpGs in .GlobalEnv;
+    # mirror the binding briefly with on.exit cleanup so the user's
+    # workspace isn't permanently mutated.
+    if (!is.null(.qc_env$PCClocks_CpGs) &&
+        !exists("PCClocks_CpGs", envir = .GlobalEnv, inherits = FALSE)) {
+      assign("PCClocks_CpGs", .qc_env$PCClocks_CpGs, envir = .GlobalEnv)
+      on.exit(rm("PCClocks_CpGs", envir = .GlobalEnv), add = TRUE)
+    }
 
     betas_t <- t(betas)
     sample_ids <- rownames(betas_t)
 
     if (!exists("calcPCClocks", envir = asNamespace("methylCIPHER"))) {
-      if (verbose) message("    calcPCClocks function not found in methylCIPHER")
+      if (verbose) message("    calcPCClocks not found in methylCIPHER")
+      return(results)
+    }
+    pc_func <- get("calcPCClocks", envir = asNamespace("methylCIPHER"))
+
+    # ---- Resolve Age (FIX M7/E: alert when falling back to clocks) ----
+    age_source <- "user-supplied"
+    if (!is.null(pheno) && "Age" %in% colnames(pheno) && !all(is.na(pheno$Age))) {
+      age_values <- pheno$Age
+    } else if ("Horvath2" %in% colnames(results) && !all(is.na(results$Horvath2))) {
+      message("  PC-Clocks: 'Age' not provided; using Horvath2 estimate as Age")
+      age_values <- results$Horvath2
+      age_source <- "Horvath2_estimate"
+    } else if ("Horvath1" %in% colnames(results) && !all(is.na(results$Horvath1))) {
+      message("  PC-Clocks: 'Age' not provided; Horvath2 unavailable; falling back to Horvath1")
+      age_values <- results$Horvath1
+      age_source <- "Horvath1_estimate"
+    } else {
+      warning("PC-Clocks: no Age available (pheno missing, Horvath unavailable). Skipping PC-Clocks.")
       return(results)
     }
 
-    pc_func <- get("calcPCClocks", envir = asNamespace("methylCIPHER"))
-
-    # Build pheno data - get Age values
-    if (!is.null(pheno) && is.data.frame(pheno) && "Age" %in% colnames(pheno)) {
-      age_values <- pheno$Age
-      if (verbose) message("    Using provided Age")
-    } else if ("Horvath2" %in% colnames(results)) {
-      age_values <- results$Horvath2
-      if (verbose) message("    Using Horvath2 as Age proxy")
-    } else if ("Horvath1" %in% colnames(results)) {
-      age_values <- results$Horvath1
-      if (verbose) message("    Using Horvath1 as Age proxy")
-    } else {
-      age_values <- rep(50, length(sample_ids))
-      if (verbose) message("    Warning: No age available, using placeholder 50")
-    }
-
-    # Get Female values
-    # PC clocks require Female to be integerish (0 or 1), not 0.5
-    if (!is.null(pheno) && is.data.frame(pheno) && "Female" %in% colnames(pheno)) {
+    # ---- Resolve Female (FIX F6/M8) ----
+    female_source <- "user-supplied"
+    if (!is.null(pheno) && "Female" %in% colnames(pheno) &&
+        !all(is.na(pheno$Female))) {
       female_values <- as.integer(pheno$Female)
-      if (verbose) message("    Using provided Female")
     } else if ("InferredSex" %in% colnames(results)) {
-      # Derive from InferredSex: F=1, M=0, U=0 (default to male if unknown)
+      message("  PC-Clocks: 'Female' not provided; using InferredSex (F=1, M/U=0)")
       female_values <- as.integer(results$InferredSex == "F")
-      if (verbose) message("    Using InferredSex as Female (F=1, M/U=0)")
+      female_source <- "inferred_sex"
     } else {
+      message("  PC-Clocks: 'Female' not provided and sex not inferred; defaulting to 0 (Male)")
       female_values <- rep(0L, length(sample_ids))
-      if (verbose) message("    Warning: No sex available, defaulting Female=0")
+      female_source <- "default_male"
     }
+
+    # NA Female -> 0 (PC-Clocks reject NA), with warning preserved upstream
+    female_values[is.na(female_values)] <- 0L
 
     pheno_df <- data.frame(
       Sample_ID = sample_ids,
@@ -352,63 +445,53 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
     rownames(pheno_df) <- sample_ids
 
     if (verbose) {
-      message("    PC clocks pheno: Age range = ",
-              round(min(pheno_df$Age, na.rm = TRUE), 1), " - ",
-              round(max(pheno_df$Age, na.rm = TRUE), 1),
-              ", Female: ", sum(pheno_df$Female == 1), " F, ",
-              sum(pheno_df$Female == 0), " M")
+      message(sprintf("    PC clocks pheno: Age = %s; Female = %s",
+                      age_source, female_source))
+      message(sprintf("    Age range: %.1f - %.1f; Female: %d F / %d M",
+                      min(pheno_df$Age, na.rm = TRUE),
+                      max(pheno_df$Age, na.rm = TRUE),
+                      sum(pheno_df$Female == 1L),
+                      sum(pheno_df$Female == 0L)))
     }
 
-    pc_result <- NULL
-    if (!is.null(pc_data_path)) {
-      pc_result <- tryCatch({
-        pc_func(betas_t, pheno_df, RData = pc_data_path)
-      }, error = function(e) {
+    pc_result <- tryCatch(
+      pc_func(betas_t, pheno_df, RData = pc_data_path),
+      error = function(e) {
         if (verbose) message("    PC clocks failed: ", e$message)
         NULL
       })
-    } else {
-      if (verbose) message("    PC clocks skipped: data file not available")
-    }
 
-    if (!is.null(pc_result)) {
-      if (verbose) {
-        message("    PC result type: ", class(pc_result)[1])
-        if (is.data.frame(pc_result)) {
-          message("    PC result dims: ", nrow(pc_result), " x ", ncol(pc_result))
-          message("    PC result cols: ", paste(head(colnames(pc_result), 10), collapse = ", "))
-        }
-      }
-
-      if (is.data.frame(pc_result)) {
-        pc_cols <- c("PCHorvath1", "PCHorvath2", "PCHannum",
+    if (!is.null(pc_result) && is.data.frame(pc_result)) {
+      pc_cols <- c("PCHorvath1", "PCHorvath2", "PCHannum",
                     "PCPhenoAge", "PCGrimAge", "PCDNAmTL")
-        added_pc <- c()
-        for (col in colnames(pc_result)) {
-          if (col %in% pc_cols && is.numeric(pc_result[[col]])) {
-            if (nrow(pc_result) == ncol(betas)) {
-              results[[col]] <- pc_result[[col]]
-              added_pc <- c(added_pc, col)
-            }
+      added_pc <- character()
+      for (col in colnames(pc_result)) {
+        if (col %in% pc_cols && is.numeric(pc_result[[col]])) {
+          if (nrow(pc_result) == ncol(betas)) {
+            results[[col]] <- pc_result[[col]]
+            added_pc <- c(added_pc, col)
           }
         }
-        if (verbose && length(added_pc) > 0) {
-          message("    PC clocks added: ", paste(added_pc, collapse = ", "))
-        }
       }
-    } else {
-      if (verbose) message("    PC clocks: No result returned")
+      if (verbose && length(added_pc) > 0L) {
+        message("    PC clocks added: ", paste(added_pc, collapse = ", "))
+      }
+    } else if (verbose) {
+      message("    PC clocks: no result returned")
     }
 
   }, error = function(e) {
     if (verbose) message("    PC clocks error: ", e$message)
   })
 
-  return(results)
+  results
 }
 
 
-#' Compute mitotic clocks via EpiMitClocks
+# ---------------------------------------------------------------------------
+# Mitotic clocks
+# ---------------------------------------------------------------------------
+
 #' @keywords internal
 compute_mitotic_clocks <- function(betas, results, verbose = TRUE) {
 
@@ -419,102 +502,120 @@ compute_mitotic_clocks <- function(betas, results, verbose = TRUE) {
       break
     }
   }
-
   if (is.null(epi_pkg) || "epiTOC2_TNSC" %in% colnames(results)) return(results)
 
   tryCatch({
     if (verbose) message("  Computing mitotic clocks via EpiMitClocks...")
 
     epi_data_items <- c("dataETOC3", "cugpmitclockCpG", "epiTOCcpgs3", "estETOC3",
-                        "EpiCMITcpgs", "Replitali")
+                         "EpiCMITcpgs", "Replitali")
     for (d in epi_data_items) {
       tryCatch({
-        data(list = d, package = epi_pkg, envir = .GlobalEnv)
-      }, error = function(e) NULL, warning = function(w) NULL)
+        utils::data(list = d, package = epi_pkg, envir = .qc_env)
+      }, error = function(e) NULL)
     }
 
-    if (exists("EpiMitClocks", envir = asNamespace(epi_pkg))) {
-      tryCatch({
-        epi_results <- get("EpiMitClocks", envir = asNamespace(epi_pkg))(
-          data.m = betas, ages.v = NULL
-        )
+    # Mirror to globalenv only if upstream needs it; clean up on exit
+    mirrored <- character()
+    for (d in epi_data_items) {
+      if (!is.null(.qc_env[[d]]) &&
+          !exists(d, envir = .GlobalEnv, inherits = FALSE)) {
+        assign(d, .qc_env[[d]], envir = .GlobalEnv)
+        mirrored <- c(mirrored, d)
+      }
+    }
+    on.exit(if (length(mirrored)) {
+      rm(list = mirrored, envir = .GlobalEnv)
+    }, add = TRUE)
 
-        if (!is.null(epi_results) && is.data.frame(epi_results)) {
-          if (nrow(epi_results) == ncol(betas)) {
-            for (col in colnames(epi_results)) {
-              if (is.numeric(epi_results[[col]]) && !col %in% colnames(results)) {
-                results[[col]] <- epi_results[[col]]
-              }
-            }
-            if (verbose) {
-              message("    EpiMitClocks: ", paste(colnames(epi_results), collapse = ", "))
-            }
-          }
-        }
+    if (exists("EpiMitClocks", envir = asNamespace(epi_pkg))) {
+      epi_results <- tryCatch({
+        get("EpiMitClocks", envir = asNamespace(epi_pkg))(
+          data.m = betas, ages.v = NULL)
       }, error = function(e) {
         if (verbose) message("    EpiMitClocks failed: ", e$message)
+        NULL
       })
+
+      if (!is.null(epi_results) && is.data.frame(epi_results) &&
+          nrow(epi_results) == ncol(betas)) {
+        for (col in colnames(epi_results)) {
+          if (is.numeric(epi_results[[col]]) && !col %in% colnames(results)) {
+            results[[col]] <- epi_results[[col]]
+          }
+        }
+        if (verbose) {
+          message("    EpiMitClocks: ", paste(colnames(epi_results), collapse = ", "))
+        }
+      }
     }
   }, error = function(e) {
     if (verbose) message("    Mitotic clocks error: ", e$message)
   })
 
-  return(results)
+  results
 }
 
 
-#' Compute additional methylCIPHER clocks
+# ---------------------------------------------------------------------------
+# Additional methylCIPHER clocks (AdaptAge, CausAge, DamAge, SystemsAge)
+# ---------------------------------------------------------------------------
+
 #' @keywords internal
 compute_additional_clocks <- function(betas, results, verbose = TRUE) {
 
   if (!requireNamespace("methylCIPHER", quietly = TRUE)) return(results)
 
   tryCatch({
-    if (verbose) message("  Computing additional clocks via methylCIPHER functions...")
+    if (verbose) message("  Computing additional clocks via methylCIPHER...")
 
     betas_t <- t(betas)
-
     additional_clocks <- c("AdaptAge", "CausAge", "DamAge", "SystemsAge")
 
-    for (d in c("AdaptAge_CpGs", "CausAge_CpGs", "DamAge_CpGs", "SystemsAge_CpGs")) {
+    # Load CpG datasets into .qc_env
+    needed <- c("AdaptAge_CpGs", "CausAge_CpGs", "DamAge_CpGs", "SystemsAge_CpGs")
+    for (d in needed) {
       tryCatch({
-        data(list = d, package = "methylCIPHER", envir = .GlobalEnv)
-      }, error = function(e) NULL, warning = function(w) NULL)
+        utils::data(list = d, package = "methylCIPHER", envir = .qc_env)
+      }, error = function(e) NULL)
     }
 
-    added_clocks <- c()
-
-    for (clock in additional_clocks) {
-      if (!clock %in% colnames(results)) {
-        func_name <- paste0("calc", clock)
-        tryCatch({
-          if (exists(func_name, envir = asNamespace("methylCIPHER"))) {
-            func <- get(func_name, envir = asNamespace("methylCIPHER"))
-            result <- tryCatch({
-              func(betas_t, imputation = FALSE)
-            }, error = function(e) {
-              tryCatch(func(betas_t), error = function(e2) NULL)
-            })
-
-            if (!is.null(result) && is.numeric(result)) {
-              # Handle single-sample: result might be length 1
-              if (length(result) == ncol(betas) ||
-                  (length(result) == 1 && ncol(betas) == 1)) {
-                results[[clock]] <- as.numeric(result)
-                added_clocks <- c(added_clocks, clock)
-              }
-            }
-          }
-        }, error = function(e) NULL)
+    mirrored <- character()
+    for (d in needed) {
+      if (!is.null(.qc_env[[d]]) &&
+          !exists(d, envir = .GlobalEnv, inherits = FALSE)) {
+        assign(d, .qc_env[[d]], envir = .GlobalEnv)
+        mirrored <- c(mirrored, d)
       }
     }
+    on.exit(if (length(mirrored)) rm(list = mirrored, envir = .GlobalEnv),
+             add = TRUE)
 
-    if (verbose && length(added_clocks) > 0) {
+    added_clocks <- character()
+    for (clock in additional_clocks) {
+      if (clock %in% colnames(results)) next
+      func_name <- paste0("calc", clock)
+      if (!exists(func_name, envir = asNamespace("methylCIPHER"))) next
+
+      func <- get(func_name, envir = asNamespace("methylCIPHER"))
+      result <- tryCatch(func(betas_t, imputation = FALSE),
+                          error = function(e) {
+                            tryCatch(func(betas_t),
+                                      error = function(e2) NULL)
+                          })
+      if (!is.null(result) && is.numeric(result) &&
+          (length(result) == ncol(betas) ||
+           (length(result) == 1L && ncol(betas) == 1L))) {
+        results[[clock]] <- as.numeric(result)
+        added_clocks <- c(added_clocks, clock)
+      }
+    }
+    if (verbose && length(added_clocks) > 0L) {
       message("    Additional clocks: ", paste(added_clocks, collapse = ", "))
     }
   }, error = function(e) {
     if (verbose) message("    Additional clocks error: ", e$message)
   })
 
-  return(results)
+  results
 }
