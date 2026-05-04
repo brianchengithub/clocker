@@ -378,19 +378,26 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
     }
 
     # Load PC clock CpG list into the package private env (FIX C2)
+    pre_load_objs <- ls(.qc_env, all.names = TRUE)
     tryCatch({
       utils::data(list = "PCClocks_CpGs", package = "methylCIPHER",
                    envir = .qc_env)
     }, error = function(e) NULL)
+    new_pc_objs <- setdiff(ls(.qc_env, all.names = TRUE), pre_load_objs)
 
-    # methylCIPHER's calcPCClocks may search for PCClocks_CpGs in .GlobalEnv;
-    # mirror the binding briefly with on.exit cleanup so the user's
-    # workspace isn't permanently mutated.
-    if (!is.null(.qc_env$PCClocks_CpGs) &&
-        !exists("PCClocks_CpGs", envir = .GlobalEnv, inherits = FALSE)) {
-      assign("PCClocks_CpGs", .qc_env$PCClocks_CpGs, envir = .GlobalEnv)
-      on.exit(rm("PCClocks_CpGs", envir = .GlobalEnv), add = TRUE)
+    # methylCIPHER's calcPCClocks may search for the loaded objects in
+    # .GlobalEnv; mirror the bindings briefly with on.exit cleanup so the
+    # user's workspace isn't permanently mutated.
+    pc_mirrored <- character()
+    for (obj_name in new_pc_objs) {
+      if (!exists(obj_name, envir = .GlobalEnv, inherits = FALSE)) {
+        assign(obj_name, get(obj_name, envir = .qc_env), envir = .GlobalEnv)
+        pc_mirrored <- c(pc_mirrored, obj_name)
+      }
     }
+    on.exit(if (length(pc_mirrored)) {
+      rm(list = pc_mirrored, envir = .GlobalEnv)
+    }, add = TRUE)
 
     betas_t <- t(betas)
     sample_ids <- rownames(betas_t)
@@ -509,19 +516,25 @@ compute_mitotic_clocks <- function(betas, results, verbose = TRUE) {
 
     epi_data_items <- c("dataETOC3", "cugpmitclockCpG", "epiTOCcpgs3", "estETOC3",
                          "EpiCMITcpgs", "Replitali")
+
+    # Track which objects were already in .qc_env so we only mirror NEW ones
+    pre_load_objs <- ls(.qc_env, all.names = TRUE)
     for (d in epi_data_items) {
       tryCatch({
         utils::data(list = d, package = epi_pkg, envir = .qc_env)
       }, error = function(e) NULL)
     }
+    new_objs <- setdiff(ls(.qc_env, all.names = TRUE), pre_load_objs)
+    # Note: data() typically loads objects with their actual stored names
+    # (e.g., dataETOC3.l, not dataETOC3), so we mirror the *loaded objects*
+    # rather than the dataset names. This is what EpiMitClocks::EpiMitClocks
+    # expects to find in .GlobalEnv at call time.
 
-    # Mirror to globalenv only if upstream needs it; clean up on exit
     mirrored <- character()
-    for (d in epi_data_items) {
-      if (!is.null(.qc_env[[d]]) &&
-          !exists(d, envir = .GlobalEnv, inherits = FALSE)) {
-        assign(d, .qc_env[[d]], envir = .GlobalEnv)
-        mirrored <- c(mirrored, d)
+    for (obj_name in new_objs) {
+      if (!exists(obj_name, envir = .GlobalEnv, inherits = FALSE)) {
+        assign(obj_name, get(obj_name, envir = .qc_env), envir = .GlobalEnv)
+        mirrored <- c(mirrored, obj_name)
       }
     }
     on.exit(if (length(mirrored)) {
@@ -574,18 +587,19 @@ compute_additional_clocks <- function(betas, results, verbose = TRUE) {
 
     # Load CpG datasets into .qc_env
     needed <- c("AdaptAge_CpGs", "CausAge_CpGs", "DamAge_CpGs", "SystemsAge_CpGs")
+    pre_load_objs <- ls(.qc_env, all.names = TRUE)
     for (d in needed) {
       tryCatch({
         utils::data(list = d, package = "methylCIPHER", envir = .qc_env)
       }, error = function(e) NULL)
     }
+    new_objs <- setdiff(ls(.qc_env, all.names = TRUE), pre_load_objs)
 
     mirrored <- character()
-    for (d in needed) {
-      if (!is.null(.qc_env[[d]]) &&
-          !exists(d, envir = .GlobalEnv, inherits = FALSE)) {
-        assign(d, .qc_env[[d]], envir = .GlobalEnv)
-        mirrored <- c(mirrored, d)
+    for (obj_name in new_objs) {
+      if (!exists(obj_name, envir = .GlobalEnv, inherits = FALSE)) {
+        assign(obj_name, get(obj_name, envir = .qc_env), envir = .GlobalEnv)
+        mirrored <- c(mirrored, obj_name)
       }
     }
     on.exit(if (length(mirrored)) rm(list = mirrored, envir = .GlobalEnv),

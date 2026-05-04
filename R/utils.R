@@ -216,8 +216,8 @@ coerce_female_indicator <- function(x, na_on_unknown = TRUE) {
 #' Validate beta matrix format and values
 #'
 #' Robust M-value detection: only flips M->beta when the *median* (not the
-#' min/max) of the input falls outside [0, 1]. A single bad probe in 800k
-#' shouldn't wreck an entire matrix.
+#' min/max) of the input falls outside the unit interval (0 to 1). A
+#' single bad probe in 800k shouldn't wreck an entire matrix.
 #'
 #' @param betas Matrix to validate
 #' @return Validated (possibly corrected) beta matrix
