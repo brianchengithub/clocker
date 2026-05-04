@@ -49,7 +49,8 @@ source("install_dependencies.R")
 Then install clocker from GitHub:
 
 ```r
-devtools::install_github("<your-username>/clocker")
+install.packages("pak") 
+pak::pak("brianchengithub/clocker")
 ```
 
 The installer pulls the required Bioconductor (`sesame`, `EpiDISH`) and
