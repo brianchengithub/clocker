@@ -93,10 +93,17 @@ estimate_cell_composition <- function(betas, results, verbose = TRUE) {
     # since the indices are not informative diagnostics. The function
     # itself is a single matrix call internally; capturing output is far
     # cheaper than running CP per-sample.
+    # EpiDISH's DoCP() iterates across samples and emits sample indices via
+    # message(s) inside the loop (NOT print(s) — capture.output alone does
+    # not silence messages). We wrap with both suppressMessages() and
+    # capture.output() so that any cat()/print() output is absorbed AND
+    # the per-sample message() prints are suppressed.
     cp_result <- tryCatch({
       utils::capture.output(
-        out <- EpiDISH::epidish(beta.m = betas_subset, ref.m = ref_subset,
-                                  method = "CP")
+        out <- suppressMessages(
+          EpiDISH::epidish(beta.m = betas_subset, ref.m = ref_subset,
+                             method = "CP")
+        )
       )
       out
     }, error = function(e) {

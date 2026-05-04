@@ -290,7 +290,10 @@ compute_dunedin_pace <- function(betas, results, verbose = TRUE) {
       colnames(betas_dp) <- c(sample_name, paste0(sample_name, "_dup"))
     }
 
-    pace <- DunedinPACE::PACEProjector(betas_dp)
+    # PACEProjector triggers requireNamespace("preprocessCore") on first
+    # call which emits "Loading required namespace: preprocessCore" via
+    # message(). Suppress that message; it is purely informational.
+    pace <- suppressMessages(DunedinPACE::PACEProjector(betas_dp))
     if (!is.null(pace)) {
       pace_val <- if (is.list(pace) && "DunedinPACE" %in% names(pace)) pace$DunedinPACE
                   else if (is.data.frame(pace) && "DunedinPACE" %in% colnames(pace)) pace$DunedinPACE
@@ -467,20 +470,27 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
     }
 
     # methylCIPHER::calcPCClocks emits "Calculating PC Clocks now" and
-    # "PC Clocks successfully calculated!" via print() / message(). We
-    # capture both streams and replay under verbose for tidy output.
-    pc_stdout <- character()
+    # "PC Clocks successfully calculated!" via message(). It may also
+    # call requireNamespace("preprocessCore") which emits "Loading
+    # required namespace: preprocessCore" via message(). capture.output
+    # with type="output" only catches print()/cat(); we need a nested
+    # capture.output(type="message") to catch the message() calls too.
+    pc_stdout   <- character()
+    pc_messages <- character()
     pc_result <- tryCatch({
-      pc_stdout <- utils::capture.output(
-        out <- pc_func(betas_t, pheno_df, RData = pc_data_path)
-      )
+      pc_stdout <- utils::capture.output({
+        pc_messages <<- utils::capture.output(
+          out <- pc_func(betas_t, pheno_df, RData = pc_data_path),
+          type = "message"
+        )
+      })
       out
     }, error = function(e) {
       if (verbose) message("    PC clocks failed: ", e$message)
       NULL
     })
-    if (verbose && length(pc_stdout) > 0L) {
-      for (line in pc_stdout) {
+    if (verbose) {
+      for (line in c(pc_messages, pc_stdout)) {
         clean <- sub('^\\[1\\] "', "", sub('"$', "", line))
         if (nzchar(clean)) message("    PC-Clocks: ", clean)
       }
