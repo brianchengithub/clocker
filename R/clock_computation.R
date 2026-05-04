@@ -461,12 +461,25 @@ compute_pc_clocks <- function(betas, results, pheno = NULL, verbose = TRUE) {
                       sum(pheno_df$Female == 0L)))
     }
 
-    pc_result <- tryCatch(
-      pc_func(betas_t, pheno_df, RData = pc_data_path),
-      error = function(e) {
-        if (verbose) message("    PC clocks failed: ", e$message)
-        NULL
-      })
+    # methylCIPHER::calcPCClocks emits "Calculating PC Clocks now" and
+    # "PC Clocks successfully calculated!" via print() / message(). We
+    # capture both streams and replay under verbose for tidy output.
+    pc_stdout <- character()
+    pc_result <- tryCatch({
+      pc_stdout <- utils::capture.output(
+        out <- pc_func(betas_t, pheno_df, RData = pc_data_path)
+      )
+      out
+    }, error = function(e) {
+      if (verbose) message("    PC clocks failed: ", e$message)
+      NULL
+    })
+    if (verbose && length(pc_stdout) > 0L) {
+      for (line in pc_stdout) {
+        clean <- sub('^\\[1\\] "', "", sub('"$', "", line))
+        if (nzchar(clean)) message("    PC-Clocks: ", clean)
+      }
+    }
 
     if (!is.null(pc_result) && is.data.frame(pc_result)) {
       pc_cols <- c("PCHorvath1", "PCHorvath2", "PCHannum",

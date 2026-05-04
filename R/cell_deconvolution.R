@@ -66,9 +66,12 @@ estimate_cell_composition <- function(betas, results, verbose = TRUE) {
     betas_subset <- betas[common_probes, , drop = FALSE]
     ref_subset   <- ref_matrix[common_probes, , drop = FALSE]
 
-    # RPC method
+    n_samples <- ncol(betas_subset)
+
+    # ---- RPC method (fast, vectorized, quiet) ----
     rpc_result <- tryCatch(
-      EpiDISH::epidish(beta.m = betas_subset, ref.m = ref_subset, method = "RPC"),
+      EpiDISH::epidish(beta.m = betas_subset, ref.m = ref_subset,
+                         method = "RPC"),
       error = function(e) {
         if (verbose) message("    EpiDISH RPC error: ", e$message)
         NULL
@@ -84,13 +87,22 @@ estimate_cell_composition <- function(betas, results, verbose = TRUE) {
       }
     }
 
-    # CP method
-    cp_result <- tryCatch(
-      EpiDISH::epidish(beta.m = betas_subset, ref.m = ref_subset, method = "CP"),
-      error = function(e) {
-        if (verbose) message("    EpiDISH CP error: ", e$message)
-        NULL
-      })
+    # ---- CP method ----
+    # EpiDISH's DoCP() prints sample indices to stdout via print() as it
+    # iterates ("1\n2\n3\n..."). We capture that stdout and discard it,
+    # since the indices are not informative diagnostics. The function
+    # itself is a single matrix call internally; capturing output is far
+    # cheaper than running CP per-sample.
+    cp_result <- tryCatch({
+      utils::capture.output(
+        out <- EpiDISH::epidish(beta.m = betas_subset, ref.m = ref_subset,
+                                  method = "CP")
+      )
+      out
+    }, error = function(e) {
+      if (verbose) message("    EpiDISH CP error: ", e$message)
+      NULL
+    })
     if (!is.null(cp_result) && !is.null(cp_result$estF)) {
       cp_fracs <- as.data.frame(cp_result$estF)
       if (nrow(cp_fracs) == ncol(betas)) {
