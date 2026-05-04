@@ -35,4 +35,4 @@ Suggests:
     progress,
     curl
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.0
+RoxygenNote: 7.3.3
